@@ -63,13 +63,19 @@
 </head>
 <body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
-  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Planner 7 Kolom A:G, Invest 10 Kolom A:J, Cache Harga 6 Jam) -->
+  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Planner A:G, Invest A:J, Users A:D, Cache Harga 6 Jam) -->
   <textarea id="appsScriptTemplate" style="display:none;">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
 const TX_SHEET_NAME = 'Planner';
 const FALLBACK_TX_SHEET_NAME = 'Sheet1';
 const INVEST_SHEET_NAME = 'Invest';
+const USERS_SHEET_NAME = 'Users';
 const MARKET_PRICE_CACHE_KEY = 'market_prices_v1';
 const MARKET_PRICE_CACHE_TTL_SECONDS = 21600; // 6 jam
+
+const DEFAULT_USERS_SEED = [
+  ['Kevin', 'Kevin', '#6366F1'],
+  ['Vivie', 'Vivie', '#EC4899']
+];
 
 function getOrCreateSheet(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
@@ -99,6 +105,72 @@ function getInvestSheet() {
   return getOrCreateSheet(ss, INVEST_SHEET_NAME, [
     'Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'
   ]);
+}
+
+function getUsersSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
+  const sheet = getOrCreateSheet(ss, USERS_SHEET_NAME, [
+    'Username', 'Password', 'BadgeColor', 'UpdatedAt'
+  ]);
+  if (sheet.getLastRow() <= 1) {
+    const nowTs = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
+    for (let i = 0; i < DEFAULT_USERS_SEED.length; i++) {
+      const seed = DEFAULT_USERS_SEED[i];
+      sheet.appendRow([seed[0], seed[1], seed[2], nowTs]);
+      const rowNum = sheet.getLastRow();
+      sheet.getRange(rowNum, 2).setNumberFormat('@').setValue(String(seed[1]));
+    }
+  }
+  return sheet;
+}
+
+function findUserRow(usersSheet, username) {
+  const target = String(username || '').trim().toLowerCase();
+  if (!target) return null;
+  const rows = usersSheet.getDataRange().getDisplayValues();
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const sheetUser = String(row[0] || '').trim();
+    if (sheetUser && sheetUser.toLowerCase() === target) {
+      return {
+        rowNumber: i + 1,
+        username: sheetUser,
+        password: String(row[1] || ''),
+        badgeColor: String(row[2] || '').trim() || (sheetUser.toLowerCase() === 'vivie' ? '#EC4899' : '#6366F1'),
+        updatedAt: String(row[3] || '').trim()
+      };
+    }
+  }
+  return null;
+}
+
+function handleLoginAction(payload) {
+  const username = String(payload.username || '').trim();
+  const password = String(payload.password || '');
+  if (!username || !password) return jsonResponse({ status: 'error', message: 'Username dan password wajib diisi.' });
+  const found = findUserRow(getUsersSheet(), username);
+  if (!found || found.password !== password) {
+    return jsonResponse({ status: 'error', message: 'Username atau password salah!' });
+  }
+  return jsonResponse({ status: 'success', message: 'Login berhasil', user: { username: found.username, badgeColor: found.badgeColor } });
+}
+
+function handleChangePasswordAction(payload, tz) {
+  const username = String(payload.username || '').trim();
+  const currentPassword = String(payload.currentPassword || '');
+  const newPassword = String(payload.newPassword || '');
+  if (!username || !currentPassword || !newPassword) return jsonResponse({ status: 'error', message: 'Semua kolom password wajib diisi.' });
+  if (newPassword.length < 4) return jsonResponse({ status: 'error', message: 'Password baru minimal 4 karakter.' });
+  if (newPassword === currentPassword) return jsonResponse({ status: 'error', message: 'Password baru harus berbeda dari password lama.' });
+  const usersSheet = getUsersSheet();
+  const found = findUserRow(usersSheet, username);
+  if (!found) return jsonResponse({ status: 'error', message: 'Akun tidak ditemukan di sheet Users.' });
+  if (found.password !== currentPassword) return jsonResponse({ status: 'error', message: 'Password lama tidak sesuai!' });
+  const updatedAt = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
+  usersSheet.getRange(found.rowNumber, 2).setNumberFormat('@').setValue(newPassword);
+  usersSheet.getRange(found.rowNumber, 4).setNumberFormat('@').setValue(updatedAt);
+  return jsonResponse({ status: 'success', message: 'Password berhasil diperbarui!', updatedAt: updatedAt });
 }
 
 function formatCellDate(val, tz) {
@@ -306,6 +378,9 @@ function doPost(e) {
   try {
     const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
     const payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const action = String(payload.action || '').trim().toLowerCase();
+    if (action === 'login') return handleLoginAction(payload);
+    if (action === 'changepassword' || action === 'change_password') return handleChangePasswordAction(payload, tz);
     const rawType = String(payload.type || 'Pengeluaran').trim();
     const isInvest = rawType.toLowerCase() === 'invest' || String(payload.targetSheet || '').toLowerCase() === 'invest';
     const tanggal = String(payload.tanggal || payload.date || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd')).trim();
@@ -380,11 +455,11 @@ function doPost(e) {
       <form id="loginForm" onsubmit="event.preventDefault(); handleLogin();" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-6">
         <div>
           <h2 class="text-lg font-bold text-slate-900">Masuk ke Akun</h2>
-          <p class="text-xs text-slate-500 mt-0.5">Masukkan username &amp; password Kevin atau Vivie</p>
+          <p class="text-xs text-slate-500 mt-0.5">Autentikasi langsung melalui Google Sheet (Users)</p>
         </div>
 
         <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3.5 py-2.5 rounded-xl">
-          ❌ Username atau password salah! Gunakan akun Kevin atau Vivie.
+          ❌ Username atau password salah!
         </div>
 
         <div>
@@ -392,7 +467,7 @@ function doPost(e) {
           <input
             type="text"
             id="login-username"
-            placeholder="Kevin atau Vivie"
+            placeholder="Masukkan username"
             autocomplete="username"
             autocapitalize="none"
             autocorrect="off"
@@ -421,31 +496,10 @@ function doPost(e) {
         <button
           type="submit"
           id="btnLogin"
-          class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+          class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] disabled:opacity-60 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition cursor-pointer"
         >
           Masuk
         </button>
-
-        <!-- Tombol Pintas Isi Akun -->
-        <div class="pt-2 border-t border-slate-100">
-          <p class="text-[11px] font-semibold text-slate-400 text-center mb-2">Isi Cepat Akun:</p>
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onclick="quickFillAccount('Kevin')"
-              class="py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition cursor-pointer"
-            >
-              Isi Akun Kevin
-            </button>
-            <button
-              type="button"
-              onclick="quickFillAccount('Vivie')"
-              class="py-2 px-3 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 border border-pink-200 text-xs font-bold transition cursor-pointer"
-            >
-              Isi Akun Vivie
-            </button>
-          </div>
-        </div>
       </form>
 
       <div class="text-center pb-3">
@@ -475,6 +529,16 @@ function doPost(e) {
           </div>
 
           <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              onclick="openChangePasswordModal()"
+              title="Ganti Password"
+              class="p-2.5 rounded-xl bg-slate-800 hover:bg-indigo-600/80 text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </button>
             <button
               type="button"
               onclick="openSettingsModal()"
@@ -1235,6 +1299,84 @@ function doPost(e) {
       </div>
     </div>
 
+    <!-- ==================== CHANGE PASSWORD MODAL ==================== -->
+    <div id="change-password-modal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4">
+      <div class="w-full max-w-[400px] bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-fade-up">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-extrabold text-slate-900">Ganti Password</h3>
+            <p class="text-[11px] text-slate-500">Akun aktif: <strong id="cp-username-label" class="text-indigo-600">-</strong></p>
+          </div>
+          <button type="button" onclick="closeChangePasswordModal()" class="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer">✕</button>
+        </div>
+
+        <div id="cp-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3.5 py-2.5 rounded-xl"></div>
+
+        <form id="changePasswordForm" onsubmit="handleChangePassword(event)" class="space-y-3.5">
+          <div>
+            <label for="cp-current-password" class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Password Lama</label>
+            <input
+              type="password"
+              id="cp-current-password"
+              autocomplete="current-password"
+              placeholder="Masukkan password saat ini"
+              required
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label for="cp-new-password" class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Password Baru</label>
+            <input
+              type="password"
+              id="cp-new-password"
+              autocomplete="new-password"
+              placeholder="Minimal 4 karakter"
+              minlength="4"
+              required
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label for="cp-confirm-password" class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Konfirmasi Password Baru</label>
+            <input
+              type="password"
+              id="cp-confirm-password"
+              autocomplete="new-password"
+              placeholder="Ulangi password baru"
+              minlength="4"
+              required
+              class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500"
+            />
+          </div>
+
+          <div class="flex items-center justify-between pt-1">
+            <button type="button" id="toggle-cp-pwd" onclick="toggleChangePasswordVisibility()" class="text-xs font-bold text-slate-500 hover:text-indigo-600 cursor-pointer">
+              Lihat Password
+            </button>
+          </div>
+
+          <div class="flex gap-2 pt-1">
+            <button
+              type="button"
+              onclick="closeChangePasswordModal()"
+              class="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              id="btn-submit-cp"
+              class="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold transition cursor-pointer"
+            >
+              Simpan Password
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
   </div>
 
   <!-- ==================== JAVASCRIPT APPLICATION LOGIC ==================== -->
@@ -1270,6 +1412,7 @@ function doPost(e) {
 
     // State Aplikasi
     let currentUser = null;
+    let currentUserBadgeColor = "";
     let sheet1Transactions = []; // Planner: 7 kolom A:G
     let investTransactions = []; // Invest: 10 kolom A:J
     let customCategories = { Pengeluaran: [], Pemasukan: [] };
@@ -1340,11 +1483,10 @@ function doPost(e) {
       loadLocalStateSafe();
 
       try {
-        const savedUser = (localStorage.getItem("kv_finance_user") || "").trim().toLowerCase();
-        if (savedUser === "kevin") {
-          loginSuccess("Kevin");
-        } else if (savedUser === "vivie") {
-          loginSuccess("Vivie");
+        const savedUser = (localStorage.getItem("kv_finance_user") || "").trim();
+        const savedBadge = (localStorage.getItem("kv_finance_user_badge") || "").trim();
+        if (savedUser) {
+          loginSuccess(savedUser, savedBadge);
         } else {
           showLoginScreen();
         }
@@ -1474,14 +1616,43 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 3. LOGIN & AUTHENTICATION (Kevin / Kevin & Vivie / Vivie)
+    // 3. LOGIN, AUTHENTICATION & GANTI PASSWORD (GOOGLE SHEET "Users")
     // =========================================================================
-    function validateLoginCredentials(username, password) {
-      const rawUser = String(username || "").trim().toLowerCase();
-      const rawPass = String(password || "").trim().toLowerCase();
-      if (rawUser === "kevin" && rawPass === "kevin") return "Kevin";
-      if (rawUser === "vivie" && rawPass === "vivie") return "Vivie";
-      return null;
+    function buildLoginPayload(username, password) {
+      return {
+        action: "login",
+        username: String(username || "").trim(),
+        password: String(password || "")
+      };
+    }
+
+    function buildChangePasswordPayload(username, currentPassword, newPassword) {
+      return {
+        action: "changePassword",
+        username: String(username || "").trim(),
+        currentPassword: String(currentPassword || ""),
+        newPassword: String(newPassword || "")
+      };
+    }
+
+    function validateChangePasswordInput(currentPassword, newPassword, confirmPassword) {
+      const cur = String(currentPassword || "");
+      const next = String(newPassword || "");
+      const conf = String(confirmPassword || "");
+
+      if (!cur || !next || !conf) {
+        return { ok: false, message: "Semua kolom password wajib diisi." };
+      }
+      if (next.length < 4) {
+        return { ok: false, message: "Password baru minimal 4 karakter." };
+      }
+      if (next !== conf) {
+        return { ok: false, message: "Konfirmasi password baru tidak cocok." };
+      }
+      if (next === cur) {
+        return { ok: false, message: "Password baru harus berbeda dari password lama." };
+      }
+      return { ok: true, message: "" };
     }
 
     function togglePasswordVisibility() {
@@ -1497,53 +1668,89 @@ function doPost(e) {
       }
     }
 
-    function quickFillAccount(accountName) {
-      const userEl = document.getElementById("login-username");
-      const passEl = document.getElementById("login-password");
+    function showLoginError(message) {
       const errorBox = document.getElementById("login-error");
-      if (userEl) userEl.value = accountName;
-      if (passEl) passEl.value = accountName;
-      if (errorBox) errorBox.classList.add("hidden");
-    }
-
-    function handleLogin() {
-      try {
-        const userEl = document.getElementById("login-username");
-        const passEl = document.getElementById("login-password");
-        const errorBox = document.getElementById("login-error");
-
-        const canonicalUser = validateLoginCredentials(
-          userEl ? userEl.value : "",
-          passEl ? passEl.value : ""
-        );
-
-        if (canonicalUser) {
-          if (errorBox) errorBox.classList.add("hidden");
-          try { localStorage.setItem("kv_finance_user", canonicalUser); } catch (e) {}
-          loginSuccess(canonicalUser);
-        } else {
-          if (errorBox) errorBox.classList.remove("hidden");
-          const form = document.getElementById("loginForm");
-          if (form) {
-            form.classList.remove("animate-shake");
-            void form.offsetWidth;
-            form.classList.add("animate-shake");
-          }
-        }
-      } catch (err) {
-        showToast("Gagal memproses login: " + err.message, "⚠️");
+      if (errorBox) {
+        errorBox.textContent = "❌ " + (message || "Username atau password salah!");
+        errorBox.classList.remove("hidden");
+      }
+      const form = document.getElementById("loginForm");
+      if (form) {
+        form.classList.remove("animate-shake");
+        void form.offsetWidth;
+        form.classList.add("animate-shake");
       }
     }
 
-    function loginSuccess(username) {
+    async function handleLogin() {
+      const userEl = document.getElementById("login-username");
+      const passEl = document.getElementById("login-password");
+      const errorBox = document.getElementById("login-error");
+      const btn = document.getElementById("btnLogin");
+
+      const username = (userEl ? userEl.value : "").trim();
+      const password = passEl ? passEl.value : "";
+
+      if (!username || !password) {
+        showLoginError("Username dan password wajib diisi.");
+        return;
+      }
+
+      const scriptUrl = getScriptUrl();
+      if (!scriptUrl) {
+        showLoginError("URL Apps Script belum dikonfigurasi.");
+        return;
+      }
+
+      if (errorBox) errorBox.classList.add("hidden");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Memverifikasi...";
+      }
+
+      try {
+        const res = await fetch(scriptUrl, {
+          method: "POST",
+          redirect: "follow",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(buildLoginPayload(username, password))
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json();
+
+        if (json && json.status === "success" && json.user && json.user.username) {
+          const canonicalUser = String(json.user.username).trim();
+          const badgeColor = String(json.user.badgeColor || "").trim();
+          try {
+            localStorage.setItem("kv_finance_user", canonicalUser);
+            if (badgeColor) localStorage.setItem("kv_finance_user_badge", badgeColor);
+          } catch (e) {}
+          if (passEl) passEl.value = "";
+          loginSuccess(canonicalUser, badgeColor);
+        } else {
+          showLoginError((json && json.message) || "Username atau password salah!");
+        }
+      } catch (err) {
+        showLoginError("Gagal terhubung ke server Apps Script. Periksa koneksi internet.");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Masuk";
+        }
+      }
+    }
+
+    function loginSuccess(username, badgeColor) {
       currentUser = username;
+      currentUserBadgeColor =
+        badgeColor ||
+        (String(username).toLowerCase() === "vivie" ? "#EC4899" : "#6366F1");
+
       document.getElementById("header-username").textContent = username;
       const avatar = document.getElementById("user-avatar");
       avatar.textContent = username.charAt(0).toUpperCase();
-      avatar.className =
-        username === "Kevin"
-          ? "w-10 h-10 rounded-2xl bg-indigo-500 flex items-center justify-center font-extrabold text-base shadow-inner"
-          : "w-10 h-10 rounded-2xl bg-pink-500 flex items-center justify-center font-extrabold text-base shadow-inner";
+      avatar.className = "w-10 h-10 rounded-2xl flex items-center justify-center font-extrabold text-base shadow-inner";
+      avatar.style.backgroundColor = currentUserBadgeColor;
 
       document.getElementById("loginScreen").classList.add("hidden");
       document.getElementById("mainScreen").classList.remove("hidden");
@@ -1553,11 +1760,127 @@ function doPost(e) {
     }
 
     function logout() {
-      try { localStorage.removeItem("kv_finance_user"); } catch (e) {}
+      try {
+        localStorage.removeItem("kv_finance_user");
+        localStorage.removeItem("kv_finance_user_badge");
+      } catch (e) {}
       currentUser = null;
+      currentUserBadgeColor = "";
       const passEl = document.getElementById("login-password");
       if (passEl) passEl.value = "";
       showLoginScreen();
+    }
+
+    function openChangePasswordModal() {
+      if (!currentUser) return;
+      const userLabel = document.getElementById("cp-username-label");
+      const errBox = document.getElementById("cp-error");
+      const curEl = document.getElementById("cp-current-password");
+      const newEl = document.getElementById("cp-new-password");
+      const confEl = document.getElementById("cp-confirm-password");
+      const toggleBtn = document.getElementById("toggle-cp-pwd");
+
+      if (userLabel) userLabel.textContent = currentUser;
+      if (errBox) {
+        errBox.textContent = "";
+        errBox.classList.add("hidden");
+      }
+      [curEl, newEl, confEl].forEach(function (el) {
+        if (el) {
+          el.value = "";
+          el.type = "password";
+        }
+      });
+      if (toggleBtn) toggleBtn.textContent = "Lihat Password";
+
+      document.getElementById("change-password-modal").classList.remove("hidden");
+      if (curEl) curEl.focus();
+    }
+
+    function closeChangePasswordModal() {
+      const modal = document.getElementById("change-password-modal");
+      if (modal) modal.classList.add("hidden");
+    }
+
+    function toggleChangePasswordVisibility() {
+      const ids = ["cp-current-password", "cp-new-password", "cp-confirm-password"];
+      const first = document.getElementById(ids[0]);
+      const btn = document.getElementById("toggle-cp-pwd");
+      if (!first || !btn) return;
+      const show = first.type === "password";
+      ids.forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.type = show ? "text" : "password";
+      });
+      btn.textContent = show ? "Sembunyikan Password" : "Lihat Password";
+    }
+
+    async function handleChangePassword(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const curEl = document.getElementById("cp-current-password");
+      const newEl = document.getElementById("cp-new-password");
+      const confEl = document.getElementById("cp-confirm-password");
+      const errBox = document.getElementById("cp-error");
+      const btn = document.getElementById("btn-submit-cp");
+
+      const currentPassword = curEl ? curEl.value : "";
+      const newPassword = newEl ? newEl.value : "";
+      const confirmPassword = confEl ? confEl.value : "";
+
+      const check = validateChangePasswordInput(currentPassword, newPassword, confirmPassword);
+      if (!check.ok) {
+        if (errBox) {
+          errBox.textContent = "⚠️ " + check.message;
+          errBox.classList.remove("hidden");
+        }
+        return;
+      }
+
+      const scriptUrl = getScriptUrl();
+      if (!scriptUrl) {
+        if (errBox) {
+          errBox.textContent = "⚠️ URL Apps Script belum dikonfigurasi.";
+          errBox.classList.remove("hidden");
+        }
+        return;
+      }
+
+      if (errBox) errBox.classList.add("hidden");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Menyimpan...";
+      }
+
+      try {
+        const res = await fetch(scriptUrl, {
+          method: "POST",
+          redirect: "follow",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(buildChangePasswordPayload(currentUser, currentPassword, newPassword))
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = await res.json();
+
+        if (json && json.status === "success") {
+          closeChangePasswordModal();
+          showToast("Password berhasil diperbarui di Google Sheet!", "🔐");
+        } else {
+          if (errBox) {
+            errBox.textContent = "❌ " + ((json && json.message) || "Gagal mengubah password.");
+            errBox.classList.remove("hidden");
+          }
+        }
+      } catch (err) {
+        if (errBox) {
+          errBox.textContent = "❌ Gagal terhubung ke Apps Script. Periksa koneksi internet.";
+          errBox.classList.remove("hidden");
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Simpan Password";
+        }
+      }
     }
 
     // =========================================================================
