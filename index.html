@@ -3,15 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Vercel Deploy Test</title>
+  <title>Suit PvP 1v1 — Multiplayer Lobby</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     :root {
       --bg: #0f172a;
       --card: #1e293b;
+      --surface: #0f172a;
+      --border: #334155;
       --text: #f8fafc;
       --muted: #94a3b8;
-      --accent: #38bdf8;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
       --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body {
@@ -21,106 +27,338 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 1.5rem;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid #334155;
-      border-radius: 16px;
-      padding: 2rem;
-      max-width: 440px;
-      width: 100%;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(34, 197, 94, 0.15);
-      color: var(--success);
-      padding: 6px 12px;
-      border-radius: 999px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-    }
-    .dot {
-      width: 8px;
-      height: 8px;
-      background: var(--success);
-      border-radius: 50%;
-    }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-    p { color: var(--muted); font-size: 0.95rem; line-height: 1.5; margin-bottom: 1.5rem; }
-    .info-box {
-      background: #0f172a;
-      border-radius: 10px;
       padding: 1rem;
-      margin-bottom: 1.5rem;
-      font-size: 0.875rem;
     }
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 0.35rem 0;
-      border-bottom: 1px solid #1e293b;
+    .container {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.35);
     }
-    .info-row:last-child { border-bottom: none; }
-    .label { color: var(--muted); }
+    .hidden { display: none !important; }
+    h1 { font-size: 1.4rem; text-align: center; margin-bottom: 0.25rem; }
+    .subtitle { text-align: center; color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      outline: none;
+    }
+    input:focus { border-color: var(--primary); }
     button {
       width: 100%;
       padding: 0.75rem 1rem;
       border: none;
       border-radius: 10px;
-      background: var(--accent);
-      color: #0f172a;
-      font-weight: 700;
       font-size: 0.95rem;
+      font-weight: 700;
       cursor: pointer;
-      transition: opacity 0.2s;
+      transition: transform 0.1s, opacity 0.2s;
     }
-    button:hover { opacity: 0.9; }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #0f172a; }
+    .btn-secondary { background: #334155; color: var(--text); }
+    .btn-success { background: var(--success); color: #0f172a; }
+    .divider {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin: 1.25rem 0;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid var(--border);
+    }
+    .divider:not(:empty)::before { margin-right: .75em; }
+    .divider:not(:empty)::after { margin-left: .75em; }
+    .join-row { display: flex; gap: 0.5rem; }
+    .join-row input { margin-bottom: 0; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; text-align: center; }
+    .join-row button { width: auto; white-space: nowrap; padding: 0 1.25rem; }
+
+    /* Waiting Lobby */
+    .room-box {
+      background: var(--surface);
+      border: 1px dashed var(--primary);
+      border-radius: 12px;
+      padding: 1.25rem;
+      text-align: center;
+      margin-bottom: 1.25rem;
+    }
+    .room-code {
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: 6px;
+      color: var(--primary);
+      margin: 0.5rem 0;
+    }
+    .pulse {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--warning);
+      margin-right: 6px;
+      animation: blink 1.2s infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+    /* Game Arena */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+    .status-pill {
+      background: rgba(34, 197, 94, 0.15);
+      color: var(--success);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .scoreboard {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 0.85rem;
+      margin-bottom: 1.25rem;
+      text-align: center;
+    }
+    .player-name { font-size: 0.85rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .player-score { font-size: 1.6rem; font-weight: 800; margin-top: 2px; }
+    .vs { font-weight: 800; color: var(--muted); padding: 0 0.75rem; }
+
+    .battle-stage {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .hand-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 0.75rem;
+      text-align: center;
+    }
+    .hand-emoji { font-size: 3rem; margin: 0.5rem 0; }
+    .hand-label { font-size: 0.8rem; color: var(--muted); }
+
+    .banner {
+      text-align: center;
+      padding: 0.75rem;
+      border-radius: 10px;
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 1.25rem;
+    }
+    .banner.win { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+    .banner.lose { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .banner.draw { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+
+    .choices {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.65rem;
+    }
+    .choice-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.9rem 0.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .choice-btn:hover:not(:disabled) { border-color: var(--primary); background: #162238; }
+    .choice-btn.selected { border-color: var(--primary); background: rgba(56, 189, 248, 0.18); }
+    .choice-btn span.icon { font-size: 1.8rem; }
+    .choice-btn span.text { font-size: 0.8rem; }
+    .error-msg { color: var(--danger); font-size: 0.85rem; text-align: center; margin-top: 0.75rem; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="badge"><span class="dot"></span> Online di Vercel</div>
-    <h1>Deploy Berhasil!</h1>
-    <p>Aplikasi web statis ini sudah aktif di internet dengan HTTPS otomatis.</p>
+  <div class="container">
+    <!-- SCREEN 1: MENU LOBBY -->
+    <div id="screen-menu">
+      <h1>✊✌️✋ Suit PvP 1v1</h1>
+      <p class="subtitle">Buat lobby sebagai Host atau masuk sebagai Guest</p>
 
-    <div class="info-box">
-      <div class="info-row">
-        <span class="label">Domain Aktif</span>
-        <span id="host">-</span>
+      <label for="player-name">Nama Kamu</label>
+      <input type="text" id="player-name" placeholder="Masukkan nama..." maxlength="15" />
+
+      <button id="btn-create" class="btn-primary">Buat Lobby Baru (Host)</button>
+
+      <div class="divider">ATAU GABUNG SEBAGAI GUEST</div>
+
+      <label for="join-code">Masukkan 4 Digit Kode Lobby</label>
+      <div class="join-row">
+        <input type="text" id="join-code" placeholder="1234" maxlength="4" inputmode="numeric" />
+        <button id="btn-join" class="btn-secondary">Join</button>
       </div>
-      <div class="info-row">
-        <span class="label">Waktu Lokal</span>
-        <span id="clock">-</span>
-      </div>
-      <div class="info-row">
-        <span class="label">Test Interaksi JS</span>
-        <span><strong id="count">0</strong> klik</span>
-      </div>
+      <p id="menu-error" class="error-msg hidden"></p>
     </div>
 
-    <button id="btn">Klik untuk Tes JavaScript</button>
+    <!-- SCREEN 2: WAITING ROOM (HOST) -->
+    <div id="screen-wait" class="hidden">
+      <h1>Lobby Dibuat</h1>
+      <p class="subtitle">Bagikan kode ini ke temanmu untuk masuk sebagai Guest</p>
+
+      <div class="room-box">
+        <div style="font-size: 0.8rem; color: var(--muted);">KODE LOBBY</div>
+        <div id="display-code" class="room-code">----</div>
+        <button id="btn-copy" class="btn-secondary" style="width: auto; padding: 0.45rem 1rem; font-size: 0.8rem;">
+          Salin Kode
+        </button>
+      </div>
+
+      <p style="text-align: center; font-size: 0.9rem; color: var(--muted); margin-bottom: 1.25rem;">
+        <span class="pulse"></span> Menunggu Guest bergabung...
+      </p>
+      <button id="btn-cancel-wait" class="btn-secondary">Batal</button>
+    </div>
+
+    <!-- SCREEN 3: ARENA PVP -->
+    <div id="screen-game" class="hidden">
+      <div class="top-bar">
+        <span>Room: <strong id="game-room-code">----</strong></span>
+        <span id="conn-badge" class="status-pill">● Terhubung</span>
+      </div>
+
+      <div class="scoreboard">
+        <div>
+          <div id="label-me" class="player-name">Kamu</div>
+          <div id="score-me" class="player-score">0</div>
+        </div>
+        <div class="vs">VS</div>
+        <div>
+          <div id="label-opp" class="player-name">Lawan</div>
+          <div id="score-opp" class="player-score">0</div>
+        </div>
+      </div>
+
+      <div class="battle-stage">
+        <div class="hand-card">
+          <div class="hand-label">Pilihan Kamu</div>
+          <div id="my-hand" class="hand-emoji">❔</div>
+          <div id="my-hand-text" class="hand-label">Belum memilih</div>
+        </div>
+        <div class="hand-card">
+          <div class="hand-label">Pilihan Lawan</div>
+          <div id="opp-hand" class="hand-emoji">❔</div>
+          <div id="opp-hand-text" class="hand-label">Menunggu...</div>
+        </div>
+      </div>
+
+      <div id="game-banner" class="banner">Pilih Batu, Gunting, atau Kertas!</div>
+
+      <div id="choice-buttons" class="choices">
+        <button class="choice-btn" data-choice="batu">
+          <span class="icon">✊</span>
+          <span class="text">Batu</span>
+        </button>
+        <button class="choice-btn" data-choice="gunting">
+          <span class="icon">✌️</span>
+          <span class="text">Gunting</span>
+        </button>
+        <button class="choice-btn" data-choice="kertas">
+          <span class="icon">✋</span>
+          <span class="text">Kertas</span>
+        </button>
+      </div>
+
+      <button id="btn-next-round" class="btn-success hidden" style="margin-top: 1rem;">
+        Ronde Berikutnya
+      </button>
+      <button id="btn-leave" class="btn-secondary" style="margin-top: 0.65rem; font-size: 0.85rem;">
+        Keluar Lobby
+      </button>
+    </div>
   </div>
 
   <script>
-    document.getElementById('host').textContent = window.location.hostname || 'localhost';
+    const PREFIX = 'suit-pvp-id-v1-';
+    const EMOJI = { batu: '✊', gunting: '✌️', kertas: '✋' };
+    const LABEL = { batu: 'Batu', gunting: 'Gunting', kertas: 'Kertas' };
 
-    function updateClock() {
-      const now = new Date();
-      document.getElementById('clock').textContent = now.toLocaleTimeString('id-ID');
+    let peer = null;
+    let conn = null;
+    let isHost = false;
+    let roomCode = '';
+    let myName = '';
+    let oppName = '';
+    let myScore = 0;
+    let oppScore = 0;
+    let myChoice = null;
+    let oppChoice = null;
+
+    // Elements
+    const screenMenu = document.getElementById('screen-menu');
+    const screenWait = document.getElementById('screen-wait');
+    const screenGame = document.getElementById('screen-game');
+    const menuError = document.getElementById('menu-error');
+
+    function showScreen(screen) {
+      [screenMenu, screenWait, screenGame].forEach(s => s.classList.add('hidden'));
+      screen.classList.remove('hidden');
     }
-    updateClock();
-    setInterval(updateClock, 1000);
 
-    let clicks = 0;
-    document.getElementById('btn').addEventListener('click', () => {
-      clicks++;
-      document.getElementById('count').textContent = clicks;
+    function showError(msg) {
+      menuError.textContent = msg;
+      menuError.classList.remove('hidden');
+    }
+
+    function clearError() {
+      menuError.classList.add('hidden');
+    }
+
+    function cleanup() {
+      if (conn) { conn.close(); conn = null; }
+      if (peer) { peer.destroy(); peer = null; }
+      myScore = 0; oppScore = 0;
+      myChoice = null; oppChoice = null;
+    }
+
+    // 1. CREATE LOBBY (HOST)
+    document.getElementById('btn-create').addEventListener('click', () => {
+      clearError();
+      isHost = true;
+      myName = document.getElementById('player-name').value.trim() || 'Host';
+      createHostPeer();
     });
-  </script>
-</body>
-</html>
+
+    function createHostPeer() {
+      roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+      peer = new Peer(PREFIX + roomCode);
+
+      peer.on('open', () => {
+        document.getElementById('display-code').textContent = roomCode;
+        showScreen(screenWait);
+      });
+
+      peer.on('connection', (connection) => {
+        if (conn) {
+          connection.close(); // Batasi hanya 1v1 (1 Guest)
+          return;
+        }
+        conn = connection;
