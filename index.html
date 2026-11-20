@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Suit PvP 1v1 — Multiplayer Lobby</title>
-  <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -194,6 +193,7 @@
     .choice-btn span.icon { font-size: 1.8rem; }
     .choice-btn span.text { font-size: 0.8rem; }
     .error-msg { color: var(--danger); font-size: 0.85rem; text-align: center; margin-top: 0.75rem; }
+    .version-tag { text-align: center; font-size: 0.72rem; color: #475569; margin-top: 1.25rem; }
   </style>
 </head>
 <body>
@@ -289,4 +289,93 @@
       <button type="button" id="btn-next-round" class="btn-success hidden" style="margin-top: 1rem;">
         Ronde Berikutnya
       </button>
-      <button type="button" id
+      <button type="button" id="btn-leave" class="btn-secondary" style="margin-top: 0.65rem; font-size: 0.85rem;">
+        Keluar Lobby
+      </button>
+    </div>
+
+    <div class="version-tag">Versi 3.0 • HTTPS Realtime</div>
+  </div>
+
+  <script>
+    const RELAY_BASE = 'https://ntfy.sh';
+    const EMOJI = { batu: '✊', gunting: '✌️', kertas: '✋' };
+    const LABEL = { batu: 'Batu', gunting: 'Gunting', kertas: 'Kertas' };
+
+    const myId = 'p_' + Math.random().toString(36).slice(2, 10);
+    let eventSource = null;
+    let channelUrl = '';
+    let sessionStart = 0;
+    let isHost = false;
+    let roomCode = '';
+    let myName = '';
+    let oppName = '';
+    let guestId = null;
+    let myScore = 0;
+    let oppScore = 0;
+    let myChoice = null;
+    let oppChoice = null;
+    let joinTimeout = null;
+
+    const screenMenu = document.getElementById('screen-menu');
+    const screenWait = document.getElementById('screen-wait');
+    const screenGame = document.getElementById('screen-game');
+    const menuError = document.getElementById('menu-error');
+    const btnCreate = document.getElementById('btn-create');
+    const btnJoin = document.getElementById('btn-join');
+
+    function showScreen(screen) {
+      [screenMenu, screenWait, screenGame].forEach(s => s.classList.add('hidden'));
+      screen.classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      menuError.textContent = msg;
+      menuError.classList.remove('hidden');
+    }
+
+    function clearError() {
+      menuError.classList.add('hidden');
+    }
+
+    function resetButtons() {
+      btnCreate.disabled = false;
+      btnCreate.textContent = 'Buat Lobby Baru (Host)';
+      btnJoin.disabled = false;
+      btnJoin.textContent = 'Join';
+    }
+
+    function cleanup(notify = false) {
+      if (joinTimeout) { clearTimeout(joinTimeout); joinTimeout = null; }
+      if (notify && channelUrl) {
+        sendMsg({ type: 'LEAVE' });
+      }
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      channelUrl = '';
+      guestId = null;
+      myScore = 0;
+      oppScore = 0;
+      myChoice = null;
+      oppChoice = null;
+      resetButtons();
+    }
+
+    async function sendMsg(payload) {
+      if (!channelUrl) return;
+      try {
+        await fetch(channelUrl, {
+          method: 'POST',
+          body: JSON.stringify({ ...payload, senderId: myId, ts: Date.now() })
+        });
+      } catch (e) {
+        console.error('Gagal kirim pesan:', e);
+      }
+    }
+
+    function openChannel(code, onOpenCallback) {
+      channelUrl = `${RELAY_BASE}/suit-pvp-id-v3-${code}`;
+      sessionStart = Date.now() - 2000;
+      let opened = false;
