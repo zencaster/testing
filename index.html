@@ -8,9 +8,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>KV Finance — Kevin & Vivie</title>
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Chart.js -->
+  <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Google Fonts: Plus Jakarta Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -37,7 +37,6 @@
       font-family: 'Plus Jakarta Sans', sans-serif;
       background-color: #e2e8f0;
     }
-    /* Custom scrollbar hidden for mobile app feel */
     .no-scrollbar::-webkit-scrollbar {
       display: none;
     }
@@ -64,6 +63,72 @@
 </head>
 <body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
+  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Aman dari SyntaxError JS) -->
+  <textarea id="appsScriptTemplate" style="display:none;">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
+
+function getTargetSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheets()[0];
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User']);
+  }
+  return sheet;
+}
+
+function doGet() {
+  const sheet = getTargetSheet();
+  // getDisplayValues() menjaga leading zero pada format 8 digit '01122025'
+  const rows = sheet.getDataRange().getDisplayValues();
+  const result = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r[0] && !r[1] && !r[3]) continue;
+
+    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User
+    const rawNominal = String(r[0] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
+    const nominal = Number(rawNominal) || 0;
+    const keterangan = String(r[1] || '').trim();
+    const kategori = String(r[2] || 'OTHER').trim().toUpperCase() || 'OTHER';
+    const dateRaw = String(r[3] || '').trim();
+    const typeRaw = String(r[4] || '').trim();
+    const type = typeRaw.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+    const user = String(r[5] || '').trim();
+
+    result.push({
+      nominal: nominal,
+      keterangan: keterangan,
+      kategori: kategori,
+      date: dateRaw,
+      type: type,
+      user: user
+    });
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success', data: result }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  const sheet = getTargetSheet();
+  const p = JSON.parse(e.postData.contents);
+
+  const nominal = Number(String(p.nominal || 0).replace(/[^\d-]/g, '')) || 0;
+  const keterangan = String(p.keterangan || '').trim();
+  const kategori = String(p.kategori || 'OTHER').trim().toUpperCase();
+  const dateStr = String(p.date || '').trim(); // Format ddmmyyyy (contoh: 20112026)
+  const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+  const user = String(p.user || '').trim();
+
+  // Simpan ke baris paling bawah: [A: Nominal, B: Keterangan, C: Kategori, D: Date(ddmmyyyy), E: Type, F: User]
+  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user]);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}</textarea>
+
   <!-- MOBILE APP SHELL (Max Width 430px) -->
   <div id="app-shell" class="w-full max-w-[430px] min-h-screen bg-slate-50 shadow-2xl relative flex flex-col overflow-x-hidden">
 
@@ -77,8 +142,8 @@
 
     <!-- ==================== LOGIN VIEW ==================== -->
     <div id="login-view" class="flex-1 flex flex-col justify-between p-6 bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-white">
-      <div class="pt-10">
-        <div class="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center mb-6 shadow-inner">
+      <div class="pt-8">
+        <div class="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center mb-5 shadow-inner">
           <svg class="w-7 h-7 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -94,30 +159,32 @@
         </p>
       </div>
 
-      <form id="login-form" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-auto">
+      <form id="loginForm" onsubmit="event.preventDefault(); handleLogin();" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-6">
         <div>
           <h2 class="text-lg font-bold text-slate-900">Masuk ke Akun</h2>
-          <p class="text-xs text-slate-500 mt-0.5">Silakan masukkan username dan password Anda</p>
+          <p class="text-xs text-slate-500 mt-0.5">Masukkan username dan password Kevin atau Vivie</p>
         </div>
 
-        <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-medium px-3.5 py-2.5 rounded-xl">
-          Username atau password salah. Gunakan akun Kevin atau Vivie.
+        <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3.5 py-2.5 rounded-xl">
+          ❌ Username atau password salah! Gunakan akun Kevin atau Vivie.
         </div>
 
         <div>
-          <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Username</label>
+          <label for="login-username" class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Username</label>
           <input
             type="text"
             id="login-username"
             placeholder="Kevin atau Vivie"
             autocomplete="username"
+            autocapitalize="none"
+            autocorrect="off"
             required
             class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
           />
         </div>
 
         <div>
-          <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Password</label>
+          <label for="login-password" class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Password</label>
           <div class="relative">
             <input
               type="password"
@@ -125,9 +192,9 @@
               placeholder="••••••••"
               autocomplete="current-password"
               required
-              class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition pr-12"
+              class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition pr-16"
             />
-            <button type="button" id="toggle-pwd" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 text-xs font-semibold">
+            <button type="button" id="toggle-pwd" onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 p-1 text-xs font-bold">
               Lihat
             </button>
           </div>
@@ -135,13 +202,35 @@
 
         <button
           type="submit"
+          id="btnLogin"
           class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition cursor-pointer"
         >
-          Masuk Sekarang
+          Masuk
         </button>
+
+        <!-- Tombol Pintas Isi Akun -->
+        <div class="pt-2 border-t border-slate-100">
+          <p class="text-[11px] font-semibold text-slate-400 text-center mb-2">Isi Cepat Akun:</p>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onclick="quickFillAccount('Kevin')"
+              class="py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition cursor-pointer"
+            >
+              Isi Akun Kevin
+            </button>
+            <button
+              type="button"
+              onclick="quickFillAccount('Vivie')"
+              class="py-2 px-3 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 border border-pink-200 text-xs font-bold transition cursor-pointer"
+            >
+              Isi Akun Vivie
+            </button>
+          </div>
+        </div>
       </form>
 
-      <div class="text-center pb-4">
+      <div class="text-center pb-3">
         <p class="text-[11px] text-slate-400">Terhubung ke Google Sheets • Mobile View</p>
       </div>
     </div>
@@ -172,7 +261,7 @@
               type="button"
               onclick="openSettingsModal()"
               title="Pengaturan Google Sheet"
-              class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+              class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -183,7 +272,7 @@
               type="button"
               onclick="logout()"
               title="Keluar"
-              class="p-2.5 rounded-xl bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white transition"
+              class="p-2.5 rounded-xl bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white transition cursor-pointer"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -196,23 +285,23 @@
       <!-- ==================== TAB 1: INPUT TRANSAKSI ==================== -->
       <section id="tab-input" class="p-5 space-y-5 animate-fade-up">
 
-        <!-- Google Sheet Connection Banner (shown if URL not set yet) -->
+        <!-- Google Sheet Connection Banner -->
         <div id="setup-alert" class="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 flex items-center justify-between gap-3">
           <div class="flex items-center gap-2.5">
             <span class="text-lg">📊</span>
             <div>
               <p class="text-xs font-bold text-indigo-950">Hubungkan Google Sheet</p>
-              <p class="text-[11px] text-indigo-700">https://script.google.com/macros/s/AKfycbwU7x5YUQFCN4Uum8KNg4q0D8gosHchA8l5nNGhYk9W_FpeLQMfdQV0UiIqStvOPBf7/exec</p>
+              <p class="text-[11px] text-indigo-700">Tempel URL Apps Script agar otomatis masuk ke baris bawah Sheet.</p>
             </div>
           </div>
-          <button type="button" onclick="openSettingsModal()" class="shrink-0 px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm">
+          <button type="button" onclick="openSettingsModal()" class="shrink-0 px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm cursor-pointer">
             Setup
           </button>
         </div>
 
-        <form id="transaction-form" class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-5">
+        <form id="transaction-form" onsubmit="handleTransactionSubmit(event)" class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-5">
 
-          <!-- 1. TYPE (Radio Button: Default Pengeluaran) -->
+          <!-- 1. TYPE (Radio Button Pill Selector: Default Pengeluaran) -->
           <div>
             <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
               1. Type Transaksi
@@ -251,13 +340,12 @@
                 class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xl font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
               />
             </div>
-            <!-- Quick amount pills -->
+            <!-- Tombol Cepat Nominal (+10rb, +50rb, +100rb) -->
             <div class="flex gap-2 mt-2 overflow-x-auto no-scrollbar">
-              <button type="button" onclick="addQuickNominal(25000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+25rb</button>
-              <button type="button" onclick="addQuickNominal(50000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+50rb</button>
-              <button type="button" onclick="addQuickNominal(100000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+100rb</button>
-              <button type="button" onclick="addQuickNominal(500000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+500rb</button>
-              <button type="button" onclick="clearNominal()" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-600 shrink-0">Reset</button>
+              <button type="button" onclick="addQuickNominal(10000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+10rb</button>
+              <button type="button" onclick="addQuickNominal(50000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+50rb</button>
+              <button type="button" onclick="addQuickNominal(100000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+100rb</button>
+              <button type="button" onclick="clearNominal()" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-xs font-bold text-rose-600 shrink-0 ml-auto cursor-pointer">Reset</button>
             </div>
           </div>
 
@@ -269,7 +357,7 @@
             <input
               type="text"
               id="tx-keterangan"
-              placeholder="Contoh: Makan siang, Belanja sayur, Gaji..."
+              placeholder="Contoh: Bakmie, Shopee, Listrik..."
               required
               class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
             />
@@ -285,15 +373,15 @@
                 type="button"
                 id="btn-toggle-new-cat"
                 onclick="toggleNewCategoryBox()"
-                class="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                class="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer"
               >
                 <span>+ Tambah Kategori Baru</span>
               </button>
             </div>
 
-            <!-- Select existing category -->
             <select
               id="tx-kategori"
+              onchange="refreshCategoryDropdown(this.value)"
               class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
             ></select>
 
@@ -302,18 +390,18 @@
 
             <!-- Add New Category Inline Box -->
             <div id="new-category-box" class="hidden mt-3 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
-              <label class="block text-[11px] font-bold text-indigo-900">Nama Kategori Baru</label>
+              <label for="new-category-input" class="block text-[11px] font-bold text-indigo-900">Nama Kategori Baru</label>
               <div class="flex gap-2">
                 <input
                   type="text"
                   id="new-category-input"
-                  placeholder="Misal: CICILAN, INVESTASI..."
+                  placeholder="Misal: CICILAN, PULSA..."
                   class="flex-1 px-3 py-2 rounded-xl bg-white border border-indigo-200 text-xs font-bold uppercase text-slate-800 focus:outline-none focus:border-indigo-500"
                 />
                 <button
                   type="button"
                   onclick="confirmAddNewCategory()"
-                  class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition"
+                  class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
                 >
                   Pakai
                 </button>
@@ -348,7 +436,7 @@
         <div class="bg-white rounded-3xl p-4 shadow-sm border border-slate-100">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Transaksi Terakhir</h3>
-            <button type="button" onclick="switchTab('history')" class="text-xs font-bold text-indigo-600">Lihat Semua →</button>
+            <button type="button" onclick="switchTab('history')" class="text-xs font-bold text-indigo-600 cursor-pointer">Lihat Semua →</button>
           </div>
           <div id="recent-mini-list" class="space-y-2.5"></div>
         </div>
@@ -367,7 +455,7 @@
             type="button"
             onclick="syncFromGoogleSheet(true)"
             id="btn-refresh-dash"
-            class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm flex items-center gap-1.5"
+            class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
             <svg class="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -449,7 +537,7 @@
                 type="button"
                 id="cat-filter-expense"
                 onclick="setCategoryReportType('Pengeluaran')"
-                class="px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition"
+                class="px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition cursor-pointer"
               >
                 Keluar
               </button>
@@ -457,7 +545,7 @@
                 type="button"
                 id="cat-filter-income"
                 onclick="setCategoryReportType('Pemasukan')"
-                class="px-2.5 py-1 rounded-lg text-slate-500 transition"
+                class="px-2.5 py-1 rounded-lg text-slate-500 transition cursor-pointer"
               >
                 Masuk
               </button>
@@ -478,7 +566,7 @@
         <div class="flex items-center justify-between">
           <div>
             <h2 class="text-lg font-extrabold text-slate-900">Riwayat Transaksi</h2>
-            <p class="text-xs text-slate-500" id="history-count-label">0 transaksi tercatat</p>
+            <p class="text-xs text-slate-500" id="history-count-label">0 transaksi ditampilkan</p>
           </div>
           <a
             href="https://docs.google.com/spreadsheets/d/18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI/edit?gid=0#gid=0"
@@ -536,9 +624,9 @@
 
         <!-- Filter User Pills -->
         <div class="flex gap-2 overflow-x-auto no-scrollbar">
-          <button type="button" onclick="setHistoryUserFilter('ALL')" id="hist-user-ALL" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white">Semua</button>
-          <button type="button" onclick="setHistoryUserFilter('Kevin')" id="hist-user-Kevin" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200">Kevin</button>
-          <button type="button" onclick="setHistoryUserFilter('Vivie')" id="hist-user-Vivie" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200">Vivie</button>
+          <button type="button" onclick="setHistoryUserFilter('ALL')" id="hist-user-ALL" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white cursor-pointer">Semua</button>
+          <button type="button" onclick="setHistoryUserFilter('Kevin')" id="hist-user-Kevin" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200 cursor-pointer">Kevin</button>
+          <button type="button" onclick="setHistoryUserFilter('Vivie')" id="hist-user-Vivie" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200 cursor-pointer">Vivie</button>
         </div>
 
         <div id="full-history-list" class="space-y-2.5"></div>
@@ -550,7 +638,7 @@
           type="button"
           onclick="switchTab('input')"
           id="nav-input"
-          class="flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition"
+          class="flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition cursor-pointer"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -562,7 +650,7 @@
           type="button"
           onclick="switchTab('dashboard')"
           id="nav-dashboard"
-          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition"
+          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition cursor-pointer"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -574,7 +662,7 @@
           type="button"
           onclick="switchTab('history')"
           id="nav-history"
-          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition"
+          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition cursor-pointer"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -589,15 +677,15 @@
       <div class="w-full max-w-[400px] bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-fade-up max-h-[88vh] overflow-y-auto">
         <div class="flex items-center justify-between">
           <h3 class="text-base font-extrabold text-slate-900">Koneksi Google Sheet</h3>
-          <button type="button" onclick="closeSettingsModal()" class="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800">✕</button>
+          <button type="button" onclick="closeSettingsModal()" class="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer">✕</button>
         </div>
 
         <p class="text-xs text-slate-600 leading-relaxed">
-          Agar setiap transaksi otomatis masuk ke baris paling bawah pada Google Sheet Anda, tempelkan <strong>URL Web App Google Apps Script</strong> di bawah ini:
+          Tempelkan <strong>URL Web App Google Apps Script</strong> di bawah ini agar transaksi masuk ke baris paling bawah pada Google Sheet Anda:
         </p>
 
         <div>
-          <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Google Apps Script Web App URL</label>
+          <label for="script-url-input" class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Google Apps Script Web App URL</label>
           <input
             type="url"
             id="script-url-input"
@@ -610,7 +698,7 @@
           <button
             type="button"
             onclick="saveScriptUrl()"
-            class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition"
+            class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
           >
             Simpan & Sync
           </button>
@@ -618,7 +706,7 @@
             type="button"
             onclick="testGoogleSheetConnection()"
             id="btn-test-conn"
-            class="px-3 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 transition"
+            class="px-3 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 transition cursor-pointer"
           >
             Tes Koneksi
           </button>
@@ -637,74 +725,11 @@
         <div class="pt-2 border-t border-slate-100 space-y-2">
           <div class="flex items-center justify-between">
             <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Extensions &gt; Apps Script)</span>
-            <button type="button" onclick="copyAppsScriptCode()" class="text-[11px] font-bold text-indigo-600 hover:underline">
+            <button type="button" onclick="copyAppsScriptCode()" class="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer">
               Salin Kode
             </button>
           </div>
-          <pre id="apps-script-preview" class="p-3 rounded-xl bg-slate-900 text-slate-200 text-[10px] overflow-x-auto leading-relaxed">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
-
-function getTargetSheet() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = ss.getSheets()[0];
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User']);
-  }
-  return sheet;
-}
-
-function doGet() {
-  const sheet = getTargetSheet();
-  // getDisplayValues menjaga format teks 8 digit '01122025' &amp; menghindari pergeseran timezone
-  const rows = sheet.getDataRange().getDisplayValues();
-  const result = [];
-
-  for (let i = 1; i &lt; rows.length; i++) {
-    const r = rows[i];
-    if (!r[0] &amp;&amp; !r[1] &amp;&amp; !r[3]) continue;
-
-    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User
-    const rawNominal = String(r[0] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
-    const nominal = Number(rawNominal) || 0;
-    const keterangan = String(r[1] || '').trim();
-    const kategori = String(r[2] || 'OTHER').trim().toUpperCase() || 'OTHER';
-    const dateRaw = String(r[3] || '').trim();
-    const typeRaw = String(r[4] || '').trim();
-    const type = typeRaw.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
-    const user = String(r[5] || '').trim();
-
-    result.push({
-      nominal: nominal,
-      keterangan: keterangan,
-      kategori: kategori,
-      date: dateRaw,
-      type: type,
-      user: user
-    });
-  }
-
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: 'success', data: result }))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  const sheet = getTargetSheet();
-  const p = JSON.parse(e.postData.contents);
-
-  const nominal = Number(String(p.nominal || 0).replace(/[^\d-]/g, '')) || 0;
-  const keterangan = String(p.keterangan || '').trim();
-  const kategori = String(p.kategori || 'OTHER').trim().toUpperCase();
-  const dateStr = String(p.date || '').trim(); // Format ddmmyyyy (contoh: 20112026)
-  const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
-  const user = String(p.user || '').trim();
-
-  // Urutan Kolom: [A: Nominal, B: Keterangan, C: Kategori, D: Date(ddmmyyyy), E: Type, F: User]
-  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user]);
-
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: 'success' }))
-    .setMimeType(ContentService.MimeType.JSON);
-}</pre>
+          <pre id="apps-script-preview" class="p-3 rounded-xl bg-slate-900 text-slate-200 text-[10px] overflow-x-auto leading-relaxed"></pre>
         </div>
       </div>
     </div>
@@ -714,35 +739,28 @@ function doPost(e) {
   <!-- ==================== JAVASCRIPT APPLICATION LOGIC ==================== -->
   <script>
     // =========================================================================
-    // 1. KONFIGURASI DEFAULT (Isi URL Web App Apps Script di sini sebelum push GitHub)
+    // 1. KONFIGURASI DEFAULT & KATEGORI
     // =========================================================================
-    const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwU7x5YUQFCN4Uum8KNg4q0D8gosHchA8l5nNGhYk9W_FpeLQMfdQV0UiIqStvOPBf7/exec"; // Contoh: "https://script.google.com/macros/s/AKfycb.../exec"
+    const DEFAULT_SCRIPT_URL = "";
 
-    // Kredensial Login Resmi
-    const VALID_USERS = {
-      Kevin: "Kevin",
-      Vivie: "Vivie",
-    };
-
-    // Kategori Bawaan (Otomatis digabung dengan kategori dari Google Sheet)
     const DEFAULT_EXPENSE_CATEGORIES = [
       "FOOD",
-      "GROCERIES",
-      "TRANSPORT",
-      "BILLS",
-      "SHOPPING",
-      "ENTERTAINMENT",
-      "HEALTH",
-      "HOUSEHOLD",
+      "LIFE",
+      "BANK",
+      "CC",
+      "INVEST",
       "OTHER",
+      "TRAVEL",
+      "VIVIE",
+      "KEVIN"
     ];
 
     const DEFAULT_INCOME_CATEGORIES = [
       "GAJI",
       "BONUS",
       "BISNIS",
-      "INVESTASI",
-      "OTHER",
+      "INVEST",
+      "OTHER"
     ];
 
     // State Aplikasi
@@ -755,223 +773,154 @@ function doPost(e) {
     let categoryChartInstance = null;
 
     // =========================================================================
-    // 2. INISIALISASI & AUTENTIKASI
+    // 2. INISIALISASI HALAMAN (Aman terhadap cache rusak)
     // =========================================================================
-    document.addEventListener("DOMContentLoaded", () => {
-      // Set tanggal default hari ini
-      const todayStr = new Date().toISOString().split("T")[0];
-      document.getElementById("tx-tanggal").value = todayStr;
+    document.addEventListener("DOMContentLoaded", function () {
+      try {
+        const todayStr = new Date().toISOString().split("T")[0];
+        const dateEl = document.getElementById("tx-tanggal");
+        if (dateEl) dateEl.value = todayStr;
 
-      // Format header date
-      const options = { weekday: "long", day: "numeric", month: "short", year: "numeric" };
-      document.getElementById("header-date").textContent = new Date().toLocaleDateString("id-ID", options);
+        const options = { weekday: "long", day: "numeric", month: "short", year: "numeric" };
+        const headerDateEl = document.getElementById("header-date");
+        if (headerDateEl) {
+          headerDateEl.textContent = new Date().toLocaleDateString("id-ID", options);
+        }
 
-      // Load saved custom categories & local transactions
-      loadLocalState();
-
-      // Check saved user session
-      const savedUser = localStorage.getItem("kv_finance_user");
-      if (savedUser && VALID_USERS[savedUser]) {
-        loginSuccess(savedUser);
+        // Isi preview Apps Script dari hidden textarea
+        const tpl = document.getElementById("appsScriptTemplate");
+        const preview = document.getElementById("apps-script-preview");
+        if (tpl && preview) {
+          preview.textContent = tpl.value;
+        }
+      } catch (e) {
+        // Ignore non-critical UI init error
       }
 
-      // Toggle password visibility
-      document.getElementById("toggle-pwd").addEventListener("click", () => {
-        const pwdInput = document.getElementById("login-password");
-        const btn = document.getElementById("toggle-pwd");
-        if (pwdInput.type === "password") {
-          pwdInput.type = "text";
-          btn.textContent = "Sembunyi";
-        } else {
-          pwdInput.type = "password";
-          btn.textContent = "Lihat";
+      // Muat data localStorage dalam try/catch agar tidak pernah memblokir login
+      loadLocalStateSafe();
+
+      // Cek sesi login tersimpan
+      try {
+        const savedUser = (localStorage.getItem("kv_finance_user") || "").trim().toLowerCase();
+        if (savedUser === "kevin") {
+          loginSuccess("Kevin");
+        } else if (savedUser === "vivie") {
+          loginSuccess("Vivie");
         }
-      });
-
-      // Handle Login Submit
-      document.getElementById("login-form").addEventListener("submit", (e) => {
-        e.preventDefault();
-        const usernameInput = document.getElementById("login-username").value.trim();
-        const passwordInput = document.getElementById("login-password").value;
-        const errorBox = document.getElementById("login-error");
-
-        if (VALID_USERS[usernameInput] && VALID_USERS[usernameInput] === passwordInput) {
-          errorBox.classList.add("hidden");
-          localStorage.setItem("kv_finance_user", usernameInput);
-          loginSuccess(usernameInput);
-        } else {
-          errorBox.classList.remove("hidden");
-          const form = document.getElementById("login-form");
-          form.classList.remove("animate-shake");
-          void form.offsetWidth;
-          form.classList.add("animate-shake");
-        }
-      });
-
-      // Handle Transaction Submit
-      document.getElementById("transaction-form").addEventListener("submit", handleTransactionSubmit);
+      } catch (err) {
+        try { localStorage.clear(); } catch (e) {}
+      }
     });
 
-    function getScriptUrl() {
-      return localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL;
-    }
-
-    function loadLocalState() {
+    function loadLocalStateSafe() {
       try {
-        const savedTx = JSON.parse(localStorage.getItem("kv_finance_transactions") || "[]");
-        if (Array.isArray(savedTx)) {
-          transactions = savedTx.map(normalizeTransactionRow).filter((t) => t.tanggal || t.nominal > 0);
-        }
-      } catch (e) {
-        transactions = [];
-      }
-
-      try {
-        const savedCats = JSON.parse(localStorage.getItem("kv_finance_categories") || "[]");
-        if (Array.isArray(savedCats)) {
-          customCategories = Array.from(
-            new Set(savedCats.map((c) => String(c).trim().toUpperCase()).filter(Boolean))
-          );
-        }
-      } catch (e) {
-        customCategories = [];
-      }
-    }
-
-    // =========================================================================
-    // PARSER & NORMALIZER DATA GOOGLE SHEET (Kolom A..F)
-    // A: Nominal | B: Keterangan | C: Kategori | D: Date (ddmmyyyy) | E: Type | F: User
-    // =========================================================================
-    function parseNominalValue(val) {
-      if (typeof val === "number") return isFinite(val) ? Math.round(val) : 0;
-      if (val === null || val === undefined) return 0;
-      let s = String(val).trim().replace(/^rp\s*/i, "");
-      // Hapus akhiran desimal .00 atau ,00 jika ada
-      s = s.replace(/[.,]00$/, "");
-      // Bersihkan koma/titik ribuan
-      const digits = s.replace(/[^\d-]/g, "");
-      return Number(digits) || 0;
-    }
-
-    function parseSheetDateToISO(rawVal) {
-      if (!rawVal) return "";
-      let s = String(rawVal).trim();
-
-      // 1. Format 7 atau 8 digit ddmmyyyy (contoh: '01122025' atau '1122025')
-      if (/^\d{7,8}$/.test(s)) {
-        const padded = s.padStart(8, "0");
-        const dd = padded.slice(0, 2);
-        const mm = padded.slice(2, 4);
-        const yyyy = padded.slice(4, 8);
-        const mNum = parseInt(mm, 10);
-        const dNum = parseInt(dd, 10);
-        const yNum = parseInt(yyyy, 10);
-        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31 && yNum >= 2000) {
-          return `${yyyy}-${mm}-${dd}`;
-        }
-      }
-
-      // 2. Format YYYY-MM-DD
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-        return s;
-      }
-
-      // 3. Format DD/MM/YYYY atau DD-MM-YYYY
-      const slashMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-      if (slashMatch) {
-        const dd = slashMatch[1].padStart(2, "0");
-        const mm = slashMatch[2].padStart(2, "0");
-        const yyyy = slashMatch[3];
-        if (parseInt(mm, 10) >= 1 && parseInt(mm, 10) <= 12) {
-          return `${yyyy}-${mm}-${dd}`;
-        }
-      }
-
-      // 4. ISO Timestamp dari Google Sheets Date Object (konversi eksplisit ke Asia/Jakarta WIB)
-      if (s.includes("T") || s.includes("GMT") || s.includes("Z")) {
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) {
-          try {
-            const parts = new Intl.DateTimeFormat("en-US", {
-              timeZone: "Asia/Jakarta",
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-            }).formatToParts(d);
-            const y = parts.find((p) => p.type === "year")?.value;
-            const m = parts.find((p) => p.type === "month")?.value;
-            const day = parts.find((p) => p.type === "day")?.value;
-            if (y && m && day) return `${y}-${m}-${day}`;
-          } catch (e) {
-            // Fallback manual UTC+7 (WIB)
-            const wib = new Date(d.getTime() + 7 * 3600 * 1000);
-            return wib.toISOString().split("T")[0];
+        const rawTx = localStorage.getItem("kv_finance_transactions");
+        if (rawTx) {
+          const parsedTx = JSON.parse(rawTx);
+          if (Array.isArray(parsedTx)) {
+            transactions = parsedTx
+              .map(normalizeTransactionRow)
+              .filter(function (t) { return t.tanggal || t.nominal > 0; });
           }
         }
-      }
 
-      return "";
-    }
-
-    function formatISOToDDMMYYYY(isoDate) {
-      if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return "";
-      const [yyyy, mm, dd] = isoDate.split("-");
-      return `${dd}${mm}${yyyy}`;
-    }
-
-    function normalizeTransactionRow(raw) {
-      if (!raw || typeof raw !== "object") {
-        return { tanggal: "", date: "", type: "Pengeluaran", nominal: 0, keterangan: "", kategori: "OTHER", user: "" };
-      }
-
-      // Deteksi otomatis jika payload berasal dari Apps Script versi lama (Kolom A terbaca sbg tanggal)
-      const isLegacyShifted =
-        raw.tanggal &&
-        /^\d+$/.test(String(raw.tanggal).trim()) &&
-        String(raw.tanggal).trim().length !== 8 &&
-        raw.keterangan &&
-        /^\d{7,8}$/.test(String(raw.keterangan).trim());
-
-      if (isLegacyShifted) {
-        const iso = parseSheetDateToISO(raw.keterangan);
-        return {
-          tanggal: iso,
-          date: formatISOToDDMMYYYY(iso),
-          nominal: parseNominalValue(raw.tanggal),
-          keterangan: String(raw.type || "").trim(),
-          kategori: String(raw.kategori || "OTHER").trim().toUpperCase() || "OTHER",
-          type: String(raw.user || "").trim().toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
-          user: "",
-        };
-      }
-
-      const isoDate = parseSheetDateToISO(raw.date || raw.tanggal || raw.Date || "");
-      const rawType = String(raw.type || raw.Type || "").trim();
-      const type = rawType.toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran";
-      const kategori = String(raw.kategori || raw.Kategori || "OTHER").trim().toUpperCase() || "OTHER";
-
-      return {
-        tanggal: isoDate,
-        date: formatISOToDDMMYYYY(isoDate) || String(raw.date || ""),
-        nominal: parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran),
-        keterangan: String(raw.keterangan || raw.Keterangan || "").trim(),
-        kategori,
-        type,
-        user: String(raw.user || raw.User || "").trim(),
-      };
-    }
-
-      try {
-        const savedCats = JSON.parse(localStorage.getItem("kv_finance_categories") || "[]");
-        if (Array.isArray(savedCats)) customCategories = savedCats;
-      } catch (e) {
+        const rawCats = localStorage.getItem("kv_finance_categories");
+        if (rawCats) {
+          const parsedCats = JSON.parse(rawCats);
+          if (Array.isArray(parsedCats)) {
+            customCategories = Array.from(
+              new Set(
+                parsedCats
+                  .map(function (c) { return String(c).trim().toUpperCase(); })
+                  .filter(Boolean)
+              )
+            );
+          }
+        }
+      } catch (err) {
+        try { localStorage.clear(); } catch (e) {}
+        transactions = [];
         customCategories = [];
       }
     }
 
     function saveLocalState() {
-      localStorage.setItem("kv_finance_transactions", JSON.stringify(transactions));
-      localStorage.setItem("kv_finance_categories", JSON.stringify(customCategories));
+      try {
+        localStorage.setItem("kv_finance_transactions", JSON.stringify(transactions));
+        localStorage.setItem("kv_finance_categories", JSON.stringify(customCategories));
+      } catch (err) {
+        // Ignore quota/storage errors
+      }
+    }
+
+    function getScriptUrl() {
+      try {
+        return localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL;
+      } catch (err) {
+        return DEFAULT_SCRIPT_URL;
+      }
+    }
+
+    // =========================================================================
+    // 3. SISTEM LOGIN & AUTENTIKASI (Kevin & Vivie Case-Insensitive)
+    // =========================================================================
+    function togglePasswordVisibility() {
+      const pwdInput = document.getElementById("login-password");
+      const btn = document.getElementById("toggle-pwd");
+      if (!pwdInput || !btn) return;
+      if (pwdInput.type === "password") {
+        pwdInput.type = "text";
+        btn.textContent = "Tutup";
+      } else {
+        pwdInput.type = "password";
+        btn.textContent = "Lihat";
+      }
+    }
+
+    function quickFillAccount(accountName) {
+      const userEl = document.getElementById("login-username");
+      const passEl = document.getElementById("login-password");
+      const errorBox = document.getElementById("login-error");
+      if (userEl) userEl.value = accountName;
+      if (passEl) passEl.value = accountName;
+      if (errorBox) errorBox.classList.add("hidden");
+    }
+
+    function handleLogin() {
+      try {
+        const userEl = document.getElementById("login-username");
+        const passEl = document.getElementById("login-password");
+        const errorBox = document.getElementById("login-error");
+
+        const rawUser = (userEl ? userEl.value : "").trim().toLowerCase();
+        const rawPass = (passEl ? passEl.value : "").trim().toLowerCase();
+
+        let canonicalUser = null;
+        if (rawUser === "kevin" && rawPass === "kevin") {
+          canonicalUser = "Kevin";
+        } else if (rawUser === "vivie" && rawPass === "vivie") {
+          canonicalUser = "Vivie";
+        }
+
+        if (canonicalUser) {
+          if (errorBox) errorBox.classList.add("hidden");
+          try {
+            localStorage.setItem("kv_finance_user", canonicalUser);
+          } catch (e) {}
+          loginSuccess(canonicalUser);
+        } else {
+          if (errorBox) errorBox.classList.remove("hidden");
+          const form = document.getElementById("loginForm");
+          if (form) {
+            form.classList.remove("animate-shake");
+            void form.offsetWidth;
+            form.classList.add("animate-shake");
+          }
+        }
+      } catch (err) {
+        showToast("Gagal memproses login: " + err.message, "⚠️");
+      }
     }
 
     function loginSuccess(username) {
@@ -991,6 +940,7 @@ function doPost(e) {
       refreshCategoryDropdown();
       renderRecentMiniList();
       populateMonthFilter();
+      populateHistoryFilters();
 
       if (getScriptUrl()) {
         syncFromGoogleSheet(false);
@@ -998,15 +948,139 @@ function doPost(e) {
     }
 
     function logout() {
-      localStorage.removeItem("kv_finance_user");
+      try {
+        localStorage.removeItem("kv_finance_user");
+      } catch (e) {}
       currentUser = null;
-      document.getElementById("login-password").value = "";
+      const passEl = document.getElementById("login-password");
+      if (passEl) passEl.value = "";
       document.getElementById("main-view").classList.add("hidden");
       document.getElementById("login-view").classList.remove("hidden");
     }
 
     // =========================================================================
-    // 3. KONEKSI & SINKRONISASI GOOGLE SHEET
+    // 4. PARSER & NORMALIZER DATA GOOGLE SHEET (Kolom A..F)
+    // =========================================================================
+    function parseNominalValue(val) {
+      if (typeof val === "number") return isFinite(val) ? Math.round(val) : 0;
+      if (val === null || val === undefined) return 0;
+      let s = String(val).trim().replace(/^rp\s*/i, "");
+      s = s.replace(/[.,]00$/, "");
+      const digits = s.replace(/[^\d-]/g, "");
+      return Number(digits) || 0;
+    }
+
+    function parseSheetDateToISO(rawVal) {
+      if (!rawVal) return "";
+      const s = String(rawVal).trim();
+
+      // 1. Format 7 atau 8 digit ddmmyyyy (contoh: '01122025' atau '1122025')
+      if (/^\d{7,8}$/.test(s)) {
+        const padded = s.padStart(8, "0");
+        const dd = padded.slice(0, 2);
+        const mm = padded.slice(2, 4);
+        const yyyy = padded.slice(4, 8);
+        const mNum = parseInt(mm, 10);
+        const dNum = parseInt(dd, 10);
+        const yNum = parseInt(yyyy, 10);
+        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31 && yNum >= 2000) {
+          return yyyy + "-" + mm + "-" + dd;
+        }
+      }
+
+      // 2. Format YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        return s;
+      }
+
+      // 3. Format DD/MM/YYYY atau DD-MM-YYYY
+      const slashMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (slashMatch) {
+        const dd = slashMatch[1].padStart(2, "0");
+        const mm = slashMatch[2].padStart(2, "0");
+        const yyyy = slashMatch[3];
+        if (parseInt(mm, 10) >= 1 && parseInt(mm, 10) <= 12) {
+          return yyyy + "-" + mm + "-" + dd;
+        }
+      }
+
+      // 4. ISO Timestamp dari Google Sheets Date Object (WIB Asia/Jakarta)
+      if (s.includes("T") || s.includes("GMT") || s.includes("Z")) {
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) {
+          try {
+            const parts = new Intl.DateTimeFormat("en-US", {
+              timeZone: "Asia/Jakarta",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit"
+            }).formatToParts(d);
+            const yPart = parts.find(function (p) { return p.type === "year"; });
+            const mPart = parts.find(function (p) { return p.type === "month"; });
+            const dPart = parts.find(function (p) { return p.type === "day"; });
+            if (yPart && mPart && dPart) {
+              return yPart.value + "-" + mPart.value + "-" + dPart.value;
+            }
+          } catch (e) {
+            const wib = new Date(d.getTime() + 7 * 3600 * 1000);
+            return wib.toISOString().split("T")[0];
+          }
+        }
+      }
+
+      return "";
+    }
+
+    function formatISOToDDMMYYYY(isoDate) {
+      if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return "";
+      const parts = isoDate.split("-");
+      return parts[2] + parts[1] + parts[0];
+    }
+
+    function normalizeTransactionRow(raw) {
+      if (!raw || typeof raw !== "object") {
+        return { tanggal: "", date: "", type: "Pengeluaran", nominal: 0, keterangan: "", kategori: "OTHER", user: "" };
+      }
+
+      // Deteksi otomatis jika payload berasal dari Apps Script versi lama
+      const isLegacyShifted =
+        raw.tanggal &&
+        /^\d+$/.test(String(raw.tanggal).trim()) &&
+        String(raw.tanggal).trim().length !== 8 &&
+        raw.keterangan &&
+        /^\d{7,8}$/.test(String(raw.keterangan).trim());
+
+      if (isLegacyShifted) {
+        const iso = parseSheetDateToISO(raw.keterangan);
+        return {
+          tanggal: iso,
+          date: formatISOToDDMMYYYY(iso),
+          nominal: parseNominalValue(raw.tanggal),
+          keterangan: String(raw.type || "").trim(),
+          kategori: String(raw.kategori || "OTHER").trim().toUpperCase() || "OTHER",
+          type: String(raw.user || "").trim().toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
+          user: ""
+        };
+      }
+
+      const isoDate = parseSheetDateToISO(raw.date || raw.tanggal || raw.Date || "");
+      const rawType = String(raw.type || raw.Type || "").trim();
+      const type = rawType.toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran";
+      const kategori = String(raw.kategori || raw.Kategori || "OTHER").trim().toUpperCase() || "OTHER";
+
+      return {
+        tanggal: isoDate,
+        date: formatISOToDDMMYYYY(isoDate) || String(raw.date || ""),
+        nominal: parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran),
+        keterangan: String(raw.keterangan || raw.Keterangan || "").trim(),
+        kategori: kategori,
+        type: type,
+        user: String(raw.user || raw.User || "").trim()
+      };
+    }
+
+    // =========================================================================
+    // 5. KONEKSI & SINKRONISASI GOOGLE SHEET
     // =========================================================================
     function updateConnectionUI() {
       const url = getScriptUrl();
@@ -1021,13 +1095,16 @@ function doPost(e) {
       } else {
         badge.className =
           "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300";
-        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Belum Sync Sheet';
+        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Mode Lokal';
         setupAlert.classList.remove("hidden");
       }
     }
 
     function openSettingsModal() {
       document.getElementById("script-url-input").value = getScriptUrl();
+      const tpl = document.getElementById("appsScriptTemplate");
+      const preview = document.getElementById("apps-script-preview");
+      if (tpl && preview) preview.textContent = tpl.value;
       document.getElementById("settings-modal").classList.remove("hidden");
     }
 
@@ -1037,7 +1114,9 @@ function doPost(e) {
 
     function saveScriptUrl() {
       const val = document.getElementById("script-url-input").value.trim();
-      localStorage.setItem("kv_finance_script_url", val);
+      try {
+        localStorage.setItem("kv_finance_script_url", val);
+      } catch (e) {}
       updateConnectionUI();
       closeSettingsModal();
       if (val) {
@@ -1048,7 +1127,10 @@ function doPost(e) {
     }
 
     function copyAppsScriptCode() {
-      const code = document.getElementById("apps-script-preview").textContent;
+      const tpl = document.getElementById("appsScriptTemplate");
+      const code = tpl ? tpl.value : "";
+      if (!code) return;
+
       const textarea = document.createElement("textarea");
       textarea.value = code;
       textarea.style.position = "fixed";
@@ -1060,7 +1142,7 @@ function doPost(e) {
         showToast("Kode Apps Script berhasil disalin!", "📋");
       } catch (err) {
         if (navigator.clipboard) {
-          navigator.clipboard.writeText(code).then(() => {
+          navigator.clipboard.writeText(code).then(function () {
             showToast("Kode Apps Script berhasil disalin!", "📋");
           });
         }
@@ -1090,11 +1172,11 @@ function doPost(e) {
         const res = await fetch(inputUrl);
         const json = await res.json();
         if (json.status === "success" && Array.isArray(json.data)) {
-          localStorage.setItem("kv_finance_script_url", inputUrl);
+          try { localStorage.setItem("kv_finance_script_url", inputUrl); } catch (e) {}
           updateConnectionUI();
           const normalized = json.data.map(normalizeTransactionRow);
           resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
-          resultBox.textContent = `✅ Terhubung! Ditemukan ${normalized.length} baris transaksi di Google Sheet.`;
+          resultBox.textContent = "✅ Terhubung! Ditemukan " + normalized.length + " baris transaksi di Google Sheet.";
           await syncFromGoogleSheet(false);
         } else {
           throw new Error("Format respon tidak sesuai");
@@ -1108,7 +1190,8 @@ function doPost(e) {
       }
     }
 
-    async function syncFromGoogleSheet(showNotification = true) {
+    async function syncFromGoogleSheet(showNotification) {
+      if (showNotification === undefined) showNotification = true;
       const url = getScriptUrl();
       if (!url) return;
 
@@ -1120,9 +1203,8 @@ function doPost(e) {
         const json = await res.json();
         if (json.status === "success" && Array.isArray(json.data)) {
           transactions = json.data.map(normalizeTransactionRow);
-          // Kumpulkan seluruh kategori unik dari data Google Sheet (trimmed & uppercase)
-          transactions.forEach((row) => {
-            if (row.kategori && !customCategories.includes(row.kategori)) {
+          transactions.forEach(function (row) {
+            if (row.kategori && customCategories.indexOf(row.kategori) === -1) {
               customCategories.push(row.kategori);
             }
           });
@@ -1133,17 +1215,21 @@ function doPost(e) {
           renderRecentMiniList();
           renderDashboard();
           renderFullHistory();
-          if (showNotification) showToast(`Sinkronisasi berhasil (${transactions.length} data)!`, "✅");
+          if (showNotification) {
+            showToast("Sinkronisasi berhasil (" + transactions.length + " data)!", "✅");
+          }
         }
       } catch (err) {
-        if (showNotification) showToast("Gagal mengambil data dari Google Sheet", "⚠️");
+        if (showNotification) {
+          showToast("Gagal mengambil data dari Google Sheet", "⚠️");
+        }
       } finally {
         if (btn) btn.classList.remove("opacity-50", "pointer-events-none");
       }
     }
 
     // =========================================================================
-    // 4. FORM INPUT TRANSAKSI & MANAJEMEN KATEGORI
+    // 6. FORM INPUT TRANSAKSI & MANAJEMEN KATEGORI
     // =========================================================================
     function getSelectedType() {
       const checked = document.querySelector('input[name="tx-type"]:checked');
@@ -1171,44 +1257,44 @@ function doPost(e) {
       const type = getSelectedType();
       const base = type === "Pengeluaran" ? DEFAULT_EXPENSE_CATEGORIES : DEFAULT_INCOME_CATEGORIES;
       const fromTx = transactions
-        .filter((t) => t.type === type && t.kategori)
-        .map((t) => t.kategori.toUpperCase());
-      const merged = Array.from(new Set([...base, ...customCategories, ...fromTx]));
-      return merged;
+        .filter(function (t) { return t.type === type && t.kategori; })
+        .map(function (t) { return t.kategori.toUpperCase(); });
+      return Array.from(new Set(base.concat(customCategories, fromTx)));
     }
 
-    function refreshCategoryDropdown(selectedCat = null) {
+    function refreshCategoryDropdown(selectedCat) {
       const select = document.getElementById("tx-kategori");
       const chipsContainer = document.getElementById("category-chips");
-      const categories = getAllAvailableCategories();
+      if (!select || !chipsContainer) return;
 
-      const previousValue = selectedCat || select.value;
+      const categories = getAllAvailableCategories();
+      const previousValue = selectedCat || select.value || categories[0];
+
       select.innerHTML = "";
       chipsContainer.innerHTML = "";
 
-      categories.forEach((cat) => {
+      categories.forEach(function (cat) {
         const opt = document.createElement("option");
         opt.value = cat;
         opt.textContent = cat;
         select.appendChild(opt);
 
-        // Render top 6 quick chips
         const chip = document.createElement("button");
         chip.type = "button";
         chip.textContent = cat;
         chip.className =
-          "px-2.5 py-1 rounded-lg text-[11px] font-bold border transition " +
+          "px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer " +
           (cat === previousValue
             ? "bg-indigo-600 text-white border-indigo-600"
             : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100");
-        chip.onclick = () => {
+        chip.onclick = function () {
           select.value = cat;
           refreshCategoryDropdown(cat);
         };
         chipsContainer.appendChild(chip);
       });
 
-      if (previousValue && categories.includes(previousValue)) {
+      if (previousValue && categories.indexOf(previousValue) !== -1) {
         select.value = previousValue;
       } else if (categories.length > 0) {
         select.value = categories[0];
@@ -1230,17 +1316,16 @@ function doPost(e) {
         showToast("Masukkan nama kategori terlebih dahulu", "⚠️");
         return;
       }
-      if (!customCategories.includes(newCat)) {
+      if (customCategories.indexOf(newCat) === -1) {
         customCategories.push(newCat);
         saveLocalState();
       }
       input.value = "";
       document.getElementById("new-category-box").classList.add("hidden");
       refreshCategoryDropdown(newCat);
-      showToast(`Kategori "${newCat}" ditambahkan!`, "🏷️");
+      showToast('Kategori "' + newCat + '" ditambahkan!', "🏷️");
     }
 
-    // Nominal formatting helpers
     function formatNominalInput(el) {
       const raw = el.value.replace(/\D/g, "");
       if (!raw) {
@@ -1279,13 +1364,13 @@ function doPost(e) {
       }
 
       const newEntry = {
-        tanggal,
-        date: formatISOToDDMMYYYY(tanggal), // Format ddmmyyyy (contoh: 20112026) untuk Kolom D Sheet
-        type,
-        nominal,
-        keterangan,
+        tanggal: tanggal,
+        date: formatISOToDDMMYYYY(tanggal), // Format ddmmyyyy untuk Kolom D Sheet
+        type: type,
+        nominal: nominal,
+        keterangan: keterangan,
         kategori: kategori.trim().toUpperCase(),
-        user: currentUser,
+        user: currentUser
       };
 
       const btn = document.getElementById("btn-submit-tx");
@@ -1294,18 +1379,16 @@ function doPost(e) {
       btn.disabled = true;
       btnText.textContent = "Menyimpan...";
 
-      // Simpan ke state lokal terlebih dahulu
       transactions.push(newEntry);
       saveLocalState();
 
-      // Kirim ke Google Sheet (baris paling bawah) jika URL tersedia
       const scriptUrl = getScriptUrl();
       if (scriptUrl) {
         try {
           await fetch(scriptUrl, {
             method: "POST",
             headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify(newEntry),
+            body: JSON.stringify(newEntry)
           });
           showToast("Tersimpan ke baris bawah Google Sheet!", "✅");
         } catch (err) {
@@ -1315,7 +1398,6 @@ function doPost(e) {
         showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
       }
 
-      // Reset form (tetap pertahankan default radio Pengeluaran)
       document.getElementById("tx-nominal").value = "";
       document.getElementById("tx-keterangan").value = "";
       document.querySelector('input[name="tx-type"][value="Pengeluaran"]').checked = true;
@@ -1330,21 +1412,21 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 5. NAVIGASI TAB & RENDER RIWAYAT
+    // 7. NAVIGASI TAB & RENDER RIWAYAT
     // =========================================================================
     function switchTab(tabName) {
       const tabs = ["input", "dashboard", "history"];
-      tabs.forEach((t) => {
-        document.getElementById(`tab-${t}`).classList.add("hidden");
-        const navBtn = document.getElementById(`nav-${t}`);
+      tabs.forEach(function (t) {
+        document.getElementById("tab-" + t).classList.add("hidden");
+        const navBtn = document.getElementById("nav-" + t);
         navBtn.className =
-          "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition";
+          "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition cursor-pointer";
       });
 
-      document.getElementById(`tab-${tabName}`).classList.remove("hidden");
-      const activeNav = document.getElementById(`nav-${tabName}`);
+      document.getElementById("tab-" + tabName).classList.remove("hidden");
+      const activeNav = document.getElementById("nav-" + tabName);
       activeNav.className =
-        "flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition";
+        "flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition cursor-pointer";
 
       if (tabName === "dashboard") {
         populateMonthFilter();
@@ -1366,38 +1448,49 @@ function doPost(e) {
       const amountClass = isExpense ? "text-rose-600" : "text-emerald-600";
       const sign = isExpense ? "-" : "+";
       const userBadge = tx.user
-        ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-            tx.user === "Kevin"
-              ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-              : "bg-pink-50 text-pink-700 border-pink-100"
-          }">${escapeHTML(tx.user)}</span>`
+        ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ' +
+          (tx.user === "Kevin"
+            ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+            : "bg-pink-50 text-pink-700 border-pink-100") +
+          '">' +
+          escapeHTML(tx.user) +
+          "</span>"
         : "";
 
-      return `
-        <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center flex-wrap gap-1.5 mb-1">
-              <span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">
-                ${escapeHTML(tx.kategori || "OTHER")}
-              </span>
-              ${userBadge}
-              <span class="text-[10px] text-slate-400">${escapeHTML(tx.tanggal || tx.date || "-")}</span>
-            </div>
-            <p class="text-xs font-bold text-slate-800 truncate">${escapeHTML(tx.keterangan || "-")}</p>
-          </div>
-          <div class="text-right shrink-0">
-            <p class="text-xs font-extrabold ${amountClass}">${sign}${formatRupiah(tx.nominal)}</p>
-          </div>
-        </div>
-      `;
+      return (
+        '<div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">' +
+        '<div class="min-w-0 flex-1">' +
+        '<div class="flex items-center flex-wrap gap-1.5 mb-1">' +
+        '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">' +
+        escapeHTML(tx.kategori || "OTHER") +
+        "</span>" +
+        userBadge +
+        '<span class="text-[10px] text-slate-400">' +
+        escapeHTML(tx.tanggal || tx.date || "-") +
+        "</span>" +
+        "</div>" +
+        '<p class="text-xs font-bold text-slate-800 truncate">' +
+        escapeHTML(tx.keterangan || "-") +
+        "</p>" +
+        "</div>" +
+        '<div class="text-right shrink-0">' +
+        '<p class="text-xs font-extrabold ' +
+        amountClass +
+        '">' +
+        sign +
+        formatRupiah(tx.nominal) +
+        "</p>" +
+        "</div>" +
+        "</div>"
+      );
     }
 
     function renderRecentMiniList() {
       const container = document.getElementById("recent-mini-list");
-      const latest = [...transactions].reverse().slice(0, 4);
+      const latest = transactions.slice().reverse().slice(0, 4);
 
       if (latest.length === 0) {
-        container.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>`;
+        container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>';
         return;
       }
       container.innerHTML = latest.map(createTransactionItemHTML).join("");
@@ -1414,7 +1507,7 @@ function doPost(e) {
       const months = new Set();
       const cats = new Set();
 
-      transactions.forEach((tx) => {
+      transactions.forEach(function (tx) {
         if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
           months.add(tx.tanggal.substring(0, 7));
         }
@@ -1425,79 +1518,84 @@ function doPost(e) {
 
       const sortedMonths = Array.from(months).sort();
       monthSelect.innerHTML = '<option value="ALL">Semua Bulan</option>';
-      sortedMonths.forEach((ym) => {
+      sortedMonths.forEach(function (ym) {
         const opt = document.createElement("option");
         opt.value = ym;
         opt.textContent = formatYearMonthLabel(ym);
         monthSelect.appendChild(opt);
       });
-      if (prevMonth && (prevMonth === "ALL" || sortedMonths.includes(prevMonth))) {
+      if (prevMonth && (prevMonth === "ALL" || sortedMonths.indexOf(prevMonth) !== -1)) {
         monthSelect.value = prevMonth;
       }
 
       const sortedCats = Array.from(cats).sort();
       catSelect.innerHTML = '<option value="ALL">Semua Kategori</option>';
-      sortedCats.forEach((c) => {
+      sortedCats.forEach(function (c) {
         const opt = document.createElement("option");
         opt.value = c;
         opt.textContent = c;
         catSelect.appendChild(opt);
       });
-      if (prevCat && (prevCat === "ALL" || sortedCats.includes(prevCat))) {
+      if (prevCat && (prevCat === "ALL" || sortedCats.indexOf(prevCat) !== -1)) {
         catSelect.value = prevCat;
       }
     }
 
     function setHistoryUserFilter(userFilter) {
       historyUserFilter = userFilter;
-      ["ALL", "Kevin", "Vivie"].forEach((u) => {
-        const btn = document.getElementById(`hist-user-${u}`);
+      ["ALL", "Kevin", "Vivie"].forEach(function (u) {
+        const btn = document.getElementById("hist-user-" + u);
         btn.className =
           u === userFilter
-            ? "px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white"
-            : "px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200";
+            ? "px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white cursor-pointer"
+            : "px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200 cursor-pointer";
       });
       renderFullHistory();
     }
 
     function renderFullHistory() {
       const container = document.getElementById("full-history-list");
-      const searchVal = (document.getElementById("hist-search-input")?.value || "").trim().toLowerCase();
-      const monthVal = document.getElementById("hist-month-filter")?.value || "ALL";
-      const typeVal = document.getElementById("hist-type-filter")?.value || "ALL";
-      const catVal = document.getElementById("hist-cat-filter")?.value || "ALL";
+      const searchEl = document.getElementById("hist-search-input");
+      const monthEl = document.getElementById("hist-month-filter");
+      const typeEl = document.getElementById("hist-type-filter");
+      const catEl = document.getElementById("hist-cat-filter");
 
-      let list = [...transactions].reverse();
+      const searchVal = (searchEl ? searchEl.value : "").trim().toLowerCase();
+      const monthVal = monthEl ? monthEl.value : "ALL";
+      const typeVal = typeEl ? typeEl.value : "ALL";
+      const catVal = catEl ? catEl.value : "ALL";
+
+      let list = transactions.slice().reverse();
 
       if (historyUserFilter !== "ALL") {
-        list = list.filter((t) => t.user === historyUserFilter);
+        list = list.filter(function (t) { return t.user === historyUserFilter; });
       }
       if (monthVal !== "ALL") {
-        list = list.filter((t) => t.tanggal && t.tanggal.startsWith(monthVal));
+        list = list.filter(function (t) { return t.tanggal && t.tanggal.startsWith(monthVal); });
       }
       if (typeVal !== "ALL") {
-        list = list.filter((t) => t.type === typeVal);
+        list = list.filter(function (t) { return t.type === typeVal; });
       }
       if (catVal !== "ALL") {
-        list = list.filter((t) => (t.kategori || "").toUpperCase() === catVal);
+        list = list.filter(function (t) { return (t.kategori || "").toUpperCase() === catVal; });
       }
       if (searchVal) {
-        list = list.filter(
-          (t) =>
-            (t.keterangan || "").toLowerCase().includes(searchVal) ||
-            (t.kategori || "").toLowerCase().includes(searchVal)
-        );
+        list = list.filter(function (t) {
+          return (
+            (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1 ||
+            (t.kategori || "").toLowerCase().indexOf(searchVal) !== -1
+          );
+        });
       }
 
-      document.getElementById("history-count-label").textContent = `${list.length} transaksi ditampilkan`;
+      document.getElementById("history-count-label").textContent = list.length + " transaksi ditampilkan";
 
       if (list.length === 0) {
-        container.innerHTML = `
-          <div class="bg-white rounded-3xl p-8 text-center border border-slate-100">
-            <p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p>
-            <p class="text-xs text-slate-400 mt-1">Coba ubah filter atau kata kunci pencarian.</p>
-          </div>
-        `;
+        container.innerHTML =
+          '<div class="bg-white rounded-3xl p-8 text-center border border-slate-100">' +
+          '<p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p>' +
+          '<p class="text-xs text-slate-400 mt-1">Coba ubah filter atau kata kunci pencarian.</p>' +
+          "</div>";
         return;
       }
 
@@ -1505,218 +1603,55 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 6. DASHBOARD ANALYTICS & CHARTS
+    // 8. DASHBOARD ANALYTICS & CHARTS (Chart.js)
     // =========================================================================
     function populateMonthFilter() {
       const select = document.getElementById("dash-month-filter");
+      if (!select) return;
       const currentVal = select.value;
       const months = new Set();
 
-      transactions.forEach((tx) => {
+      transactions.forEach(function (tx) {
         if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
           months.add(tx.tanggal.substring(0, 7)); // YYYY-MM
         }
       });
 
-      // Urutkan kronologis dari bulan paling awal ke terbaru
       const sortedMonths = Array.from(months).sort();
       select.innerHTML = '<option value="ALL">Semua Bulan</option>';
-      sortedMonths.forEach((ym) => {
+      sortedMonths.forEach(function (ym) {
         const opt = document.createElement("option");
         opt.value = ym;
         opt.textContent = formatYearMonthLabel(ym);
         select.appendChild(opt);
       });
 
-      if (currentVal && (currentVal === "ALL" || sortedMonths.includes(currentVal))) {
+      if (currentVal && (currentVal === "ALL" || sortedMonths.indexOf(currentVal) !== -1)) {
         select.value = currentVal;
       }
     }
 
     function formatYearMonthLabel(ym) {
       if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
-      const [y, m] = ym.split("-");
+      const parts = ym.split("-");
+      const y = parts[0];
+      const m = parts[1];
       const monthNames = [
-        "Januari",
-        "Februari",
-        "Maret",
-        "April",
-        "Mei",
-        "Juni",
-        "Juli",
-        "Agustus",
-        "September",
-        "Oktober",
-        "November",
-        "Desember",
+        "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+        "Juli", "Agustus", "September", "Oktober", "November", "Desember"
       ];
       const idx = parseInt(m, 10) - 1;
-      return `${monthNames[idx]} ${y}`;
+      return monthNames[idx] + " " + y;
     }
 
     function formatShortMonthLabel(ym) {
       if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
-      const [y, m] = ym.split("-");
+      const parts = ym.split("-");
+      const y = parts[0];
+      const m = parts[1];
       const shortNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
       const idx = parseInt(m, 10) - 1;
-      return `${shortNames[idx]} '${y.slice(2)}`;
-    }
-      } else {
-        showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
-      }
-
-      // Reset form (tetap pertahankan default radio Pengeluaran)
-      document.getElementById("tx-nominal").value = "";
-      document.getElementById("tx-keterangan").value = "";
-      document.querySelector('input[name="tx-type"][value="Pengeluaran"]').checked = true;
-      handleTypeChange();
-
-      btn.disabled = false;
-      btnText.textContent = originalText;
-
-      populateMonthFilter();
-      renderRecentMiniList();
-    }
-
-    // =========================================================================
-    // 5. NAVIGASI TAB & RENDER RIWAYAT
-    // =========================================================================
-    function switchTab(tabName) {
-      const tabs = ["input", "dashboard", "history"];
-      tabs.forEach((t) => {
-        document.getElementById(`tab-${t}`).classList.add("hidden");
-        const navBtn = document.getElementById(`nav-${t}`);
-        navBtn.className =
-          "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition";
-      });
-
-      document.getElementById(`tab-${tabName}`).classList.remove("hidden");
-      const activeNav = document.getElementById(`nav-${tabName}`);
-      activeNav.className =
-        "flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition";
-
-      if (tabName === "dashboard") {
-        populateMonthFilter();
-        renderDashboard();
-      } else if (tabName === "history") {
-        renderFullHistory();
-      } else {
-        renderRecentMiniList();
-      }
-    }
-
-    function formatRupiah(num) {
-      return "Rp " + (Number(num) || 0).toLocaleString("id-ID");
-    }
-
-    function createTransactionItemHTML(tx) {
-      const isExpense = tx.type === "Pengeluaran";
-      const amountClass = isExpense ? "text-rose-600" : "text-emerald-600";
-      const sign = isExpense ? "-" : "+";
-      const userBadgeClass =
-        tx.user === "Kevin"
-          ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-          : "bg-pink-50 text-pink-700 border-pink-100";
-
-      return `
-        <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-1.5 mb-1">
-              <span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">
-                ${escapeHTML(tx.kategori)}
-              </span>
-              <span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ${userBadgeClass}">
-                ${escapeHTML(tx.user || "KV")}
-              </span>
-              <span class="text-[10px] text-slate-400">${escapeHTML(tx.tanggal)}</span>
-            </div>
-            <p class="text-xs font-bold text-slate-800 truncate">${escapeHTML(tx.keterangan || "-")}</p>
-          </div>
-          <div class="text-right shrink-0">
-            <p class="text-xs font-extrabold ${amountClass}">${sign}${formatRupiah(tx.nominal)}</p>
-          </div>
-        </div>
-      `;
-    }
-
-    function renderRecentMiniList() {
-      const container = document.getElementById("recent-mini-list");
-      const latest = [...transactions].reverse().slice(0, 4);
-
-      if (latest.length === 0) {
-        container.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>`;
-        return;
-      }
-      container.innerHTML = latest.map(createTransactionItemHTML).join("");
-    }
-
-    function setHistoryUserFilter(userFilter) {
-      historyUserFilter = userFilter;
-      ["ALL", "Kevin", "Vivie"].forEach((u) => {
-        const btn = document.getElementById(`hist-user-${u}`);
-        btn.className =
-          u === userFilter
-            ? "px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white"
-            : "px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200";
-      });
-      renderFullHistory();
-    }
-
-    function renderFullHistory() {
-      const container = document.getElementById("full-history-list");
-      let list = [...transactions].reverse();
-      if (historyUserFilter !== "ALL") {
-        list = list.filter((t) => t.user === historyUserFilter);
-      }
-
-      document.getElementById("history-count-label").textContent = `${list.length} transaksi tercatat`;
-
-      if (list.length === 0) {
-        container.innerHTML = `
-          <div class="bg-white rounded-3xl p-8 text-center border border-slate-100">
-            <p class="text-sm font-bold text-slate-600">Belum ada data transaksi</p>
-            <p class="text-xs text-slate-400 mt-1">Mulai catat pengeluaran atau pemasukan di tab Input.</p>
-          </div>
-        `;
-        return;
-      }
-
-      container.innerHTML = list.map(createTransactionItemHTML).join("");
-    }
-
-    // =========================================================================
-    // 6. DASHBOARD ANALYTICS & CHARTS
-    // =========================================================================
-    function populateMonthFilter() {
-      const select = document.getElementById("dash-month-filter");
-      const currentVal = select.value;
-      const months = new Set();
-
-      transactions.forEach((tx) => {
-        if (tx.tanggal && tx.tanggal.length >= 7) {
-          months.add(tx.tanggal.substring(0, 7)); // YYYY-MM
-        }
-      });
-
-      const sortedMonths = Array.from(months).sort().reverse();
-      select.innerHTML = '<option value="ALL">Semua Bulan</option>';
-      sortedMonths.forEach((ym) => {
-        const opt = document.createElement("option");
-        opt.value = ym;
-        opt.textContent = formatYearMonthLabel(ym);
-        select.appendChild(opt);
-      });
-
-      if (currentVal && (currentVal === "ALL" || sortedMonths.includes(currentVal))) {
-        select.value = currentVal;
-      }
-    }
-
-    function formatYearMonthLabel(ym) {
-      const [y, m] = ym.split("-");
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-      const idx = parseInt(m, 10) - 1;
-      return `${monthNames[idx] || m} ${y}`;
+      return shortNames[idx] + " '" + y.slice(2);
     }
 
     function setCategoryReportType(type) {
@@ -1725,11 +1660,11 @@ function doPost(e) {
       const btnInc = document.getElementById("cat-filter-income");
 
       if (type === "Pengeluaran") {
-        btnExp.className = "px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition";
-        btnInc.className = "px-2.5 py-1 rounded-lg text-slate-500 transition";
+        btnExp.className = "px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition cursor-pointer";
+        btnInc.className = "px-2.5 py-1 rounded-lg text-slate-500 transition cursor-pointer";
       } else {
-        btnInc.className = "px-2.5 py-1 rounded-lg bg-white text-emerald-600 shadow-sm transition";
-        btnExp.className = "px-2.5 py-1 rounded-lg text-slate-500 transition";
+        btnInc.className = "px-2.5 py-1 rounded-lg bg-white text-emerald-600 shadow-sm transition cursor-pointer";
+        btnExp.className = "px-2.5 py-1 rounded-lg text-slate-500 transition cursor-pointer";
       }
       renderCategoryReport();
     }
@@ -1739,12 +1674,12 @@ function doPost(e) {
       const filteredTx =
         selectedMonth === "ALL"
           ? transactions
-          : transactions.filter((t) => t.tanggal && t.tanggal.startsWith(selectedMonth));
+          : transactions.filter(function (t) { return t.tanggal && t.tanggal.startsWith(selectedMonth); });
 
       let totalIncome = 0;
       let totalExpense = 0;
 
-      filteredTx.forEach((tx) => {
+      filteredTx.forEach(function (tx) {
         if (tx.type === "Pemasukan") totalIncome += Number(tx.nominal) || 0;
         else totalExpense += Number(tx.nominal) || 0;
       });
@@ -1775,7 +1710,7 @@ function doPost(e) {
     function renderMonthlyReport() {
       const monthlyMap = {};
 
-      transactions.forEach((tx) => {
+      transactions.forEach(function (tx) {
         if (!tx.tanggal || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) return;
         const ym = tx.tanggal.substring(0, 7);
         if (!monthlyMap[ym]) {
@@ -1787,81 +1722,88 @@ function doPost(e) {
 
       const sortedMonths = Object.keys(monthlyMap).sort();
       const labels = sortedMonths.map(formatShortMonthLabel);
-      const incomeData = sortedMonths.map((m) => monthlyMap[m].income);
-      const expenseData = sortedMonths.map((m) => monthlyMap[m].expense);
+      const incomeData = sortedMonths.map(function (m) { return monthlyMap[m].income; });
+      const expenseData = sortedMonths.map(function (m) { return monthlyMap[m].expense; });
 
-      const ctx = document.getElementById("monthlyChart").getContext("2d");
-      if (monthlyChartInstance) monthlyChartInstance.destroy();
+      const canvas = document.getElementById("monthlyChart");
+      if (canvas && typeof Chart !== "undefined") {
+        const ctx = canvas.getContext("2d");
+        if (monthlyChartInstance) monthlyChartInstance.destroy();
 
-      monthlyChartInstance = new Chart(ctx, {
-        type: "bar",
-        data: {
-          labels: labels.length ? labels : ["Belum Ada Data"],
-          datasets: [
-            {
-              label: "Pemasukan",
-              data: incomeData.length ? incomeData : [0],
-              backgroundColor: "#10b981",
-              borderRadius: 6,
-            },
-            {
-              label: "Pengeluaran",
-              data: expenseData.length ? expenseData : [0],
-              backgroundColor: "#f43f5e",
-              borderRadius: 6,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: "bottom",
-              labels: { boxWidth: 10, font: { size: 11, weight: "bold" } },
-            },
-          },
-          scales: {
-            y: {
-              beginAtZero: true,
-              ticks: {
-                font: { size: 10 },
-                callback: (val) => (val >= 1000000 ? val / 1000000 + "jt" : val >= 1000 ? val / 1000 + "rb" : val),
+        monthlyChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: labels.length ? labels : ["Belum Ada Data"],
+            datasets: [
+              {
+                label: "Pemasukan",
+                data: incomeData.length ? incomeData : [0],
+                backgroundColor: "#10b981",
+                borderRadius: 6
               },
-            },
-            x: {
-              ticks: { font: { size: 10, weight: "bold" } },
-            },
+              {
+                label: "Pengeluaran",
+                data: expenseData.length ? expenseData : [0],
+                backgroundColor: "#f43f5e",
+                borderRadius: 6
+              }
+            ]
           },
-        },
-      });
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: "bottom",
+                labels: { boxWidth: 10, font: { size: 11, weight: "bold" } }
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  font: { size: 10 },
+                  callback: function (val) {
+                    if (val >= 1000000) return (val / 1000000) + "jt";
+                    if (val >= 1000) return (val / 1000) + "rb";
+                    return val;
+                  }
+                }
+              },
+              x: {
+                ticks: { font: { size: 10, weight: "bold" } }
+              }
+            }
+          }
+        });
+      }
 
-      // Render table list below chart
       const breakdownEl = document.getElementById("monthly-breakdown-list");
       if (sortedMonths.length === 0) {
-        breakdownEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-3">Belum ada data bulanan.</p>`;
+        breakdownEl.innerHTML = '<p class="text-xs text-slate-400 text-center py-3">Belum ada data bulanan.</p>';
         return;
       }
 
-      breakdownEl.innerHTML = [...sortedMonths]
+      breakdownEl.innerHTML = sortedMonths
+        .slice()
         .reverse()
-        .map((ym) => {
+        .map(function (ym) {
           const item = monthlyMap[ym];
           const diff = item.income - item.expense;
-          return `
-            <div class="py-2.5 flex items-center justify-between text-xs">
-              <div>
-                <p class="font-extrabold text-slate-800">${formatYearMonthLabel(ym)}</p>
-                <p class="text-[11px] text-slate-400 mt-0.5">
-                  Masuk: <span class="text-emerald-600 font-semibold">${formatRupiah(item.income)}</span> • 
-                  Keluar: <span class="text-rose-600 font-semibold">${formatRupiah(item.expense)}</span>
-                </p>
-              </div>
-              <span class="font-extrabold ${diff >= 0 ? "text-emerald-600" : "text-rose-600"}">
-                ${diff >= 0 ? "+" : "-"}${formatRupiah(Math.abs(diff))}
-              </span>
-            </div>
-          `;
+          return (
+            '<div class="py-2.5 flex items-center justify-between text-xs">' +
+            "<div>" +
+            '<p class="font-extrabold text-slate-800">' + formatYearMonthLabel(ym) + "</p>" +
+            '<p class="text-[11px] text-slate-400 mt-0.5">' +
+            'Masuk: <span class="text-emerald-600 font-semibold">' + formatRupiah(item.income) + "</span> • " +
+            'Keluar: <span class="text-rose-600 font-semibold">' + formatRupiah(item.expense) + "</span>" +
+            "</p>" +
+            "</div>" +
+            '<span class="font-extrabold ' + (diff >= 0 ? "text-emerald-600" : "text-rose-600") + '">' +
+            (diff >= 0 ? "+" : "-") + formatRupiah(Math.abs(diff)) +
+            "</span>" +
+            "</div>"
+          );
         })
         .join("");
     }
@@ -1869,7 +1811,7 @@ function doPost(e) {
     // REPORT 2: Berdasarkan Kategori
     function renderCategoryReport() {
       const selectedMonth = document.getElementById("dash-month-filter").value;
-      const filteredTx = transactions.filter((t) => {
+      const filteredTx = transactions.filter(function (t) {
         const matchType = t.type === categoryReportType;
         const matchMonth = selectedMonth === "ALL" || (t.tanggal && t.tanggal.startsWith(selectedMonth));
         return matchType && matchMonth;
@@ -1878,7 +1820,7 @@ function doPost(e) {
       const catMap = {};
       let grandTotal = 0;
 
-      filteredTx.forEach((tx) => {
+      filteredTx.forEach(function (tx) {
         const cat = (tx.kategori || "OTHER").toUpperCase();
         if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
         catMap[cat].total += Number(tx.nominal) || 0;
@@ -1886,84 +1828,89 @@ function doPost(e) {
         grandTotal += Number(tx.nominal) || 0;
       });
 
-      const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
+      const sortedCats = Object.entries(catMap).sort(function (a, b) {
+        return b[1].total - a[1].total;
+      });
+
       const palette = [
-        "#6366f1",
-        "#f43f5e",
-        "#10b981",
-        "#f59e0b",
-        "#06b6d4",
-        "#8b5cf6",
-        "#ec4899",
-        "#14b8a6",
-        "#64748b",
+        "#6366f1", "#f43f5e", "#10b981", "#f59e0b", "#06b6d4",
+        "#8b5cf6", "#ec4899", "#14b8a6", "#64748b"
       ];
 
-      const ctx = document.getElementById("categoryChart").getContext("2d");
-      if (categoryChartInstance) categoryChartInstance.destroy();
+      const canvas = document.getElementById("categoryChart");
+      if (canvas && typeof Chart !== "undefined") {
+        const ctx = canvas.getContext("2d");
+        if (categoryChartInstance) categoryChartInstance.destroy();
 
-      categoryChartInstance = new Chart(ctx, {
-        type: "doughnut",
-        data: {
-          labels: sortedCats.length ? sortedCats.map((c) => c[0]) : ["Kosong"],
-          datasets: [
-            {
-              data: sortedCats.length ? sortedCats.map((c) => c[1].total) : [1],
-              backgroundColor: sortedCats.length ? palette : ["#e2e8f0"],
-              borderWidth: 2,
-              borderColor: "#ffffff",
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: "65%",
-          plugins: {
-            legend: {
-              position: "right",
-              labels: { boxWidth: 10, font: { size: 10, weight: "bold" } },
-            },
+        categoryChartInstance = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: sortedCats.length ? sortedCats.map(function (c) { return c[0]; }) : ["Kosong"],
+            datasets: [
+              {
+                data: sortedCats.length ? sortedCats.map(function (c) { return c[1].total; }) : [1],
+                backgroundColor: sortedCats.length ? palette : ["#e2e8f0"],
+                borderWidth: 2,
+                borderColor: "#ffffff"
+              }
+            ]
           },
-        },
-      });
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "65%",
+            plugins: {
+              legend: {
+                position: "right",
+                labels: { boxWidth: 10, font: { size: 10, weight: "bold" } }
+              }
+            }
+          }
+        });
+      }
 
       const listEl = document.getElementById("category-breakdown-list");
       if (sortedCats.length === 0) {
-        listEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-3">Belum ada transaksi ${categoryReportType.toLowerCase()} pada periode ini.</p>`;
+        listEl.innerHTML =
+          '<p class="text-xs text-slate-400 text-center py-3">Belum ada transaksi ' +
+          categoryReportType.toLowerCase() +
+          " pada periode ini.</p>";
         return;
       }
 
       listEl.innerHTML = sortedCats
-        .map(([cat, info], idx) => {
+        .map(function (entry, idx) {
+          const cat = entry[0];
+          const info = entry[1];
           const pct = grandTotal > 0 ? ((info.total / grandTotal) * 100).toFixed(1) : 0;
           const color = palette[idx % palette.length];
-          return `
-            <div class="space-y-1">
-              <div class="flex items-center justify-between text-xs">
-                <div class="flex items-center gap-2">
-                  <span class="w-2.5 h-2.5 rounded-full" style="background-color:${color}"></span>
-                  <span class="font-extrabold text-slate-800">${escapeHTML(cat)}</span>
-                  <span class="text-[10px] text-slate-400">(${info.count}x)</span>
-                </div>
-                <div class="text-right">
-                  <span class="font-extrabold text-slate-900">${formatRupiah(info.total)}</span>
-                  <span class="text-[10px] font-bold text-slate-400 ml-1">${pct}%</span>
-                </div>
-              </div>
-              <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div class="h-full rounded-full" style="width:${pct}%; background-color:${color}"></div>
-              </div>
-            </div>
-          `;
+          return (
+            '<div class="space-y-1">' +
+            '<div class="flex items-center justify-between text-xs">' +
+            '<div class="flex items-center gap-2">' +
+            '<span class="w-2.5 h-2.5 rounded-full" style="background-color:' + color + '"></span>' +
+            '<span class="font-extrabold text-slate-800">' + escapeHTML(cat) + "</span>" +
+            '<span class="text-[10px] text-slate-400">(' + info.count + "x)</span>" +
+            "</div>" +
+            '<div class="text-right">' +
+            '<span class="font-extrabold text-slate-900">' + formatRupiah(info.total) + "</span>" +
+            '<span class="text-[10px] font-bold text-slate-400 ml-1">' + pct + "%</span>" +
+            "</div>" +
+            "</div>" +
+            '<div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">' +
+            '<div class="h-full rounded-full" style="width:' + pct + "%; background-color:" + color + '"></div>' +
+            "</div>" +
+            "</div>"
+          );
         })
         .join("");
     }
 
     // =========================================================================
-    // 7. UTILITIES
+    // 9. UTILITIES
     // =========================================================================
-    function showToast(message, icon = "✅") {
+    function showToast(message, icon) {
+      if (!icon) icon = "✅";
       const toast = document.getElementById("toast");
       document.getElementById("toast-msg").textContent = message;
       document.getElementById("toast-icon").textContent = icon;
@@ -1972,7 +1919,7 @@ function doPost(e) {
       toast.classList.add("opacity-100", "translate-y-0");
 
       clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => {
+      window.__toastTimer = setTimeout(function () {
         toast.classList.remove("opacity-100", "translate-y-0");
         toast.classList.add("opacity-0", "-translate-y-3");
       }, 3000);
