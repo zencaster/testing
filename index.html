@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>KV Finance — Kevin & Vivie</title>
+  <title>KV Finance & Invest — Kevin & Vivie</title>
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -53,32 +53,28 @@
       animation: shake 0.35s ease-in-out;
     }
     @keyframes fadeSlideUp {
-      from { opacity: 0; transform: translateY(10px); }
+      from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
     }
     .animate-fade-up {
-      animation: fadeSlideUp 0.25s ease-out forwards;
+      animation: fadeSlideUp 0.22s ease-out forwards;
     }
   </style>
 </head>
 <body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
-  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Kolom A-I + GOOGLEFINANCE BBCA/IDR & BTC/IDR) -->
+  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Sheet1 7 Kolom A:G, Invest 10 Kolom A:J, GOOGLEFINANCE) -->
   <textarea id="appsScriptTemplate" style="display:none;">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
-const HEADERS = ['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User', 'Kode_Invest', 'Lot', 'Avg_Price'];
+const SHEET1_HEADERS = ['Date', 'Type', 'Amount', 'Keterangan', 'Kategori', 'user', 'Timestamp'];
+const INVEST_HEADERS = ['Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'];
 
-function getTargetSheet() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = ss.getSheets()[0]; // Sheet1
+function getOrCreateSheet(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(HEADERS);
-  } else {
-    // Pastikan header kolom G-I terisi jika sheet sudah ada data historis A-F
-    const headerRange = sheet.getRange(1, 1, 1, 9);
-    const currentHeaders = headerRange.getValues()[0];
-    if (!currentHeaders[6]) {
-      sheet.getRange(1, 7, 1, 3).setValues([['Kode_Invest', 'Lot', 'Avg_Price']]);
-    }
+    sheet.appendRow(headers);
   }
   return sheet;
 }
@@ -96,7 +92,7 @@ function getGoogleFinancePrices(ss) {
   const vals = priceSheet.getRange('A1:B2').getValues();
   const prices = {};
   for (let i = 0; i < vals.length; i++) {
-    const code = String(vals[i][0] || '').trim();
+    const code = String(vals[i][0] || '').trim().toUpperCase();
     const num = Number(vals[i][1]);
     if (code && !isNaN(num) && num > 0) {
       prices[code] = num;
@@ -107,43 +103,53 @@ function getGoogleFinancePrices(ss) {
 
 function doGet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = getTargetSheet();
-  const rows = sheet.getDataRange().getDisplayValues();
-  const result = [];
 
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (!r[0] && !r[1] && !r[3]) continue;
+  // 1. Baca Sheet1 (7 Kolom A:G)
+  const s1 = ss.getSheetByName('Sheet1') || ss.getSheets()[0];
+  const s1Rows = s1 ? s1.getDataRange().getDisplayValues() : [];
+  const sheet1Data = [];
 
-    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User, G=Kode_Invest, H=Lot, I=Avg_Price
-    const rawNominal = String(r[0] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
-    const nominal = Number(rawNominal) || 0;
-    const keterangan = String(r[1] || '').trim();
-    const kategori = String(r[2] || 'OTHER').trim().toUpperCase() || 'OTHER';
-    const dateRaw = String(r[3] || '').trim();
-    const typeRaw = String(r[4] || '').trim().toLowerCase();
-    let type = 'Pengeluaran';
-    if (typeRaw === 'pemasukan') type = 'Pemasukan';
-    else if (typeRaw === 'invest') type = 'Invest';
-
-    const user = String(r[5] || '').trim();
-    const kodeInvest = String(r[6] || '').trim().toUpperCase();
-    const lot = parseFloat(String(r[7] || '0').replace(',', '.')) || 0;
-    const avgPrice = Number(String(r[8] || '0').replace(/[.,]00$/, '').replace(/[^\d.-]/g, '')) || 0;
-
-    result.push({
-      nominal: nominal,
-      keterangan: keterangan,
-      kategori: kategori,
-      date: dateRaw,
-      type: type,
-      user: user,
-      kodeInvest: kodeInvest,
-      lot: lot,
-      avgPrice: avgPrice
+  for (let i = 1; i < s1Rows.length; i++) {
+    const r = s1Rows[i];
+    if (!r[0] && !r[2] && !r[3]) continue;
+    const rawAmt = String(r[2] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
+    sheet1Data.push({
+      date: String(r[0] || '').trim(),
+      type: String(r[1] || 'Pengeluaran').trim(),
+      amount: Number(rawAmt) || 0,
+      keterangan: String(r[3] || '').trim(),
+      kategori: String(r[4] || 'OTHER').trim().toUpperCase(),
+      user: String(r[5] || '').trim(),
+      timestamp: String(r[6] || '').trim()
     });
   }
 
+  // 2. Baca Sheet Invest (10 Kolom A:J)
+  const sInv = ss.getSheetByName('Invest');
+  const invRows = sInv ? sInv.getDataRange().getDisplayValues() : [];
+  const investData = [];
+
+  for (let i = 1; i < invRows.length; i++) {
+    const r = invRows[i];
+    if (!r[0] && !r[3] && !r[5]) continue;
+    const rawAmt = String(r[2] || '0').replace(/[.,]00$/, '').replace(/[^\d.-]/g, '');
+    const rawLot = String(r[3] || '0').replace(/,/g, '');
+    const rawAvg = String(r[4] || '0').replace(/[.,]00$/, '').replace(/[^\d.-]/g, '');
+    investData.push({
+      date: String(r[0] || '').trim(),
+      type: String(r[1] || 'Invest').trim(),
+      amount: Number(rawAmt) || 0,
+      lot: parseFloat(rawLot) || 0,
+      avgPrice: Number(rawAvg) || 0,
+      saham: String(r[5] || '').trim().toUpperCase(),
+      keterangan: String(r[6] || '').trim(),
+      kategori: String(r[7] || 'INVEST').trim().toUpperCase(),
+      user: String(r[8] || '').trim(),
+      timestamp: String(r[9] || '').trim()
+    });
+  }
+
+  // 3. Ambil harga GOOGLEFINANCE
   let prices = {};
   try {
     prices = getGoogleFinancePrices(ss);
@@ -152,49 +158,69 @@ function doGet() {
   }
 
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'success', data: result, prices: prices }))
+    .createTextOutput(JSON.stringify({
+      status: 'success',
+      sheet1: sheet1Data,
+      invest: investData,
+      prices: prices
+    }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 function doPost(e) {
-  const sheet = getTargetSheet();
+  const ss = SpreadsheetApp.openById(SHEET_ID);
   const p = JSON.parse(e.postData.contents);
 
-  const nominal = Number(String(p.nominal || 0).replace(/[^\d-]/g, '')) || 0;
-  const keterangan = String(p.keterangan || '').trim();
-  const kategori = String(p.kategori || 'OTHER').trim().toUpperCase();
-  const dateStr = String(p.date || '').trim(); // Format ddmmyyyy (contoh: 20112026)
-
-  let type = 'Pengeluaran';
-  if (p.type === 'Pemasukan') type = 'Pemasukan';
-  else if (p.type === 'Invest') type = 'Invest';
-
-  const user = String(p.user || '').trim();
-  const kodeInvest = type === 'Invest' ? String(p.kodeInvest || '').trim().toUpperCase() : '';
-  const lot = type === 'Invest' ? (Number(p.lot) || 0) : '';
-  const avgPrice = type === 'Invest' ? (Number(p.avgPrice) || 0) : '';
-
-  // Simpan ke baris paling bawah Sheet1: [A..I]
-  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user, kodeInvest, lot, avgPrice]);
+  if (p.targetSheet === 'Invest' || p.type === 'Invest') {
+    const invSheet = getOrCreateSheet(ss, 'Invest', INVEST_HEADERS);
+    const lot = Number(p.lot) || 0;
+    const avgPrice = Number(p.avgPrice) || 0;
+    const amount = Number(p.amount) || Math.round(lot * avgPrice);
+    invSheet.appendRow([
+      String(p.date || '').trim(),
+      'Invest',
+      amount,
+      lot,
+      avgPrice,
+      String(p.saham || '').trim().toUpperCase(),
+      String(p.keterangan || '').trim(),
+      String(p.kategori || 'INVEST').trim().toUpperCase(),
+      String(p.user || '').trim(),
+      String(p.timestamp || '').trim()
+    ]);
+  } else {
+    const s1 = getOrCreateSheet(ss, 'Sheet1', SHEET1_HEADERS);
+    const amount = Number(String(p.amount || 0).replace(/[^\d-]/g, '')) || 0;
+    const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+    s1.appendRow([
+      String(p.date || '').trim(),
+      type,
+      amount,
+      String(p.keterangan || '').trim(),
+      String(p.kategori || 'OTHER').trim().toUpperCase(),
+      String(p.user || '').trim(),
+      String(p.timestamp || '').trim()
+    ]);
+  }
 
   return ContentService
     .createTextOutput(JSON.stringify({ status: 'success' }))
     .setMimeType(ContentService.MimeType.JSON);
 }</textarea>
 
-  <!-- MOBILE APP SHELL (Max Width 430px) -->
-  <div id="app-shell" class="w-full max-w-[430px] min-h-screen bg-slate-50 shadow-2xl relative flex flex-col overflow-x-hidden">
+  <!-- MOBILE APP VIEWPORT CONTAINER (Max Width 430px) -->
+  <div id="appShell" class="w-full max-w-[430px] min-h-screen bg-slate-50 shadow-2xl relative flex flex-col overflow-x-hidden">
 
     <!-- TOAST NOTIFICATION -->
     <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-[390px] pointer-events-none opacity-0 transition-all duration-300 -translate-y-3">
-      <div id="toast-box" class="px-4 py-3 rounded-2xl shadow-lg flex items-center gap-3 text-sm font-semibold text-white bg-slate-900">
+      <div class="px-4 py-3 rounded-2xl shadow-lg flex items-center gap-3 text-sm font-semibold text-white bg-slate-900">
         <span id="toast-icon">✅</span>
         <span id="toast-msg" class="flex-1">Berhasil disimpan</span>
       </div>
     </div>
 
-    <!-- ==================== LOGIN VIEW ==================== -->
-    <div id="login-view" class="flex-1 flex flex-col justify-between p-6 bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-white">
+    <!-- ==================== LOGIN SCREEN ==================== -->
+    <div id="loginScreen" class="flex-1 flex flex-col justify-between p-6 bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-white">
       <div class="pt-8">
         <div class="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center mb-5 shadow-inner">
           <svg class="w-7 h-7 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -202,20 +228,20 @@ function doPost(e) {
           </svg>
         </div>
         <span class="inline-block text-xs font-bold tracking-wider uppercase text-indigo-300 bg-indigo-500/20 px-3 py-1 rounded-full mb-3">
-          Household Finance
+          Household Finance & Invest
         </span>
         <h1 class="text-3xl font-extrabold tracking-tight leading-tight">
           KV Finance
         </h1>
         <p class="text-slate-300 text-sm mt-2 leading-relaxed">
-          Catatan pengeluaran & pemasukan harian khusus untuk <span class="text-white font-semibold">Kevin</span> & <span class="text-white font-semibold">Vivie</span>.
+          Pencatatan pengeluaran, pemasukan & portofolio investasi khusus untuk <span class="text-white font-semibold">Kevin</span> & <span class="text-white font-semibold">Vivie</span>.
         </p>
       </div>
 
       <form id="loginForm" onsubmit="event.preventDefault(); handleLogin();" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-6">
         <div>
           <h2 class="text-lg font-bold text-slate-900">Masuk ke Akun</h2>
-          <p class="text-xs text-slate-500 mt-0.5">Masukkan username dan password Kevin atau Vivie</p>
+          <p class="text-xs text-slate-500 mt-0.5">Masukkan username & password Kevin atau Vivie</p>
         </div>
 
         <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3.5 py-2.5 rounded-xl">
@@ -247,7 +273,7 @@ function doPost(e) {
               required
               class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition pr-16"
             />
-            <button type="button" id="toggle-pwd" onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 p-1 text-xs font-bold">
+            <button type="button" id="toggle-pwd" onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 p-1 text-xs font-bold cursor-pointer">
               Lihat
             </button>
           </div>
@@ -284,12 +310,12 @@ function doPost(e) {
       </form>
 
       <div class="text-center pb-3">
-        <p class="text-[11px] text-slate-400">Terhubung ke Google Sheets • Mobile View</p>
+        <p class="text-[11px] text-slate-400">Dual-Sync Google Sheets (Sheet1 & Invest) • Mobile View</p>
       </div>
     </div>
 
-    <!-- ==================== MAIN APP VIEW ==================== -->
-    <div id="main-view" class="hidden flex-1 flex flex-col pb-24">
+    <!-- ==================== MAIN APP SCREEN ==================== -->
+    <div id="mainScreen" class="hidden flex-1 flex flex-col pb-24">
 
       <!-- TOP HEADER -->
       <header class="sticky top-0 z-30 bg-slate-900 text-white px-5 pt-4 pb-4 rounded-b-3xl shadow-md">
@@ -302,7 +328,7 @@ function doPost(e) {
               <div class="flex items-center gap-2">
                 <h1 class="text-base font-bold leading-none">Halo, <span id="header-username">Kevin</span>!</h1>
                 <span id="sync-badge" class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
-                  <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Mode Lokal
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Memuat...
                 </span>
               </div>
               <p class="text-[11px] text-slate-400 mt-1" id="header-date">Jumat, 20 Nov 2026</p>
@@ -335,22 +361,32 @@ function doPost(e) {
         </div>
       </header>
 
-      <!-- ==================== TAB 1: INPUT TRANSAKSI ==================== -->
-      <section id="tab-input" class="p-5 space-y-5 animate-fade-up">
-
-        <!-- Google Sheet Connection Banner -->
-        <div id="setup-alert" class="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2.5">
-            <span class="text-lg">📊</span>
-            <div>
-              <p class="text-xs font-bold text-indigo-950">Hubungkan Google Sheet</p>
-              <p class="text-[11px] text-indigo-700">Tempel URL Apps Script agar otomatis masuk ke baris bawah Sheet.</p>
-            </div>
-          </div>
-          <button type="button" onclick="openSettingsModal()" class="shrink-0 px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm cursor-pointer">
-            Setup
+      <!-- NON-BLOCKING CONNECTION STATUS BANNER -->
+      <div id="connectionBanner" class="hidden mx-5 mt-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2.5">
+        <div class="min-w-0 flex-1">
+          <p id="bannerTitle" class="text-xs font-extrabold text-amber-900">Mode Cadangan / Lokal Aktif</p>
+          <p id="bannerSubtitle" class="text-[11px] text-amber-700 truncate mt-0.5">Membaca data via Google Sheets Publik / Cache.</p>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onclick="syncAllSheets(true)"
+            class="px-2.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold transition cursor-pointer"
+          >
+            Coba Lagi
+          </button>
+          <button
+            type="button"
+            onclick="openSettingsModal()"
+            class="px-2.5 py-1.5 rounded-xl bg-white border border-amber-300 text-amber-800 text-[11px] font-bold hover:bg-amber-100 transition cursor-pointer"
+          >
+            Pengaturan
           </button>
         </div>
+      </div>
+
+      <!-- ==================== TAB 1: INPUT TRANSAKSI ==================== -->
+      <section id="tab-input" class="p-5 space-y-5 animate-fade-up">
 
         <form id="transaction-form" onsubmit="handleTransactionSubmit(event)" class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-5">
 
@@ -363,14 +399,14 @@ function doPost(e) {
               <label class="cursor-pointer">
                 <input type="radio" name="tx-type" value="Pengeluaran" checked class="peer sr-only" onchange="handleTypeChange()" />
                 <div class="py-2.5 px-2 rounded-xl text-center text-xs font-bold text-slate-500 peer-checked:bg-rose-500 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1">
-                  <span>💸</span> Keluar
+                  <span>💸</span> Pengeluaran
                 </div>
               </label>
 
               <label class="cursor-pointer">
                 <input type="radio" name="tx-type" value="Pemasukan" class="peer sr-only" onchange="handleTypeChange()" />
                 <div class="py-2.5 px-2 rounded-xl text-center text-xs font-bold text-slate-500 peer-checked:bg-emerald-600 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1">
-                  <span>💰</span> Masuk
+                  <span>💰</span> Pemasukan
                 </div>
               </label>
 
@@ -383,7 +419,7 @@ function doPost(e) {
             </div>
           </div>
 
-          <!-- ==================== FIELDS STANDAR (PENGELUARAN / PEMASUKAN) ==================== -->
+          <!-- ==================== FIELDS STANDAR (PENGELUARAN / PEMASUKAN -> Sheet1) ==================== -->
           <div id="standard-fields" class="space-y-5">
             <!-- NOMINAL (Rp) -->
             <div>
@@ -402,7 +438,6 @@ function doPost(e) {
                   class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xl font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
                 />
               </div>
-              <!-- Tombol Cepat Nominal (+10rb, +50rb, +100rb) -->
               <div class="flex gap-2 mt-2 overflow-x-auto no-scrollbar">
                 <button type="button" onclick="addQuickNominal(10000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+10rb</button>
                 <button type="button" onclick="addQuickNominal(50000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+50rb</button>
@@ -472,12 +507,12 @@ function doPost(e) {
             </div>
           </div>
 
-          <!-- ==================== FIELDS KHUSUS INVESTASI (TYPE = INVEST) ==================== -->
+          <!-- ==================== FIELDS KHUSUS INVESTASI (TYPE = INVEST -> Sheet Invest) ==================== -->
           <div id="invest-fields" class="hidden space-y-5">
-            <!-- 1. KODE INVEST (2 Pilihan: BBCA/IDR & BTC/IDR) -->
+            <!-- 1. KODE INVEST / SAHAM (BBCA/IDR & BTC/IDR) -->
             <div>
-              <label for="inv-kode" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                1. Kode Invest
+              <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                1. Kode Invest / Saham
               </label>
               <div class="grid grid-cols-2 gap-2.5">
                 <label class="cursor-pointer">
@@ -505,10 +540,10 @@ function doPost(e) {
               <input type="hidden" id="inv-kode" value="BBCA/IDR" />
             </div>
 
-            <!-- 2. AMOUNT / LOT -->
+            <!-- 2. AMOUNT / LOT (Lot lembar) -->
             <div>
               <label for="inv-lot" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                2. Amount / Lot
+                2. Amount / Lot (Lot lembar)
               </label>
               <input
                 type="number"
@@ -516,13 +551,13 @@ function doPost(e) {
                 step="any"
                 min="0"
                 id="inv-lot"
-                placeholder="Contoh: 10 atau 0.005"
+                placeholder="Contoh: 7000 atau 0.005"
                 oninput="updateInvestPreview()"
                 class="w-full px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-lg font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
               />
             </div>
 
-            <!-- 3. PRICE WHEN BUY / AVERAGE BUY -->
+            <!-- 3. PRICE WHEN BUY / AVERAGE BUY (Rp) -->
             <div>
               <label for="inv-avg-price" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                 3. Price When Buy / Average Buy (Rp)
@@ -539,31 +574,31 @@ function doPost(e) {
                 />
               </div>
 
-              <!-- Preview Estimasi Total Modal -->
+              <!-- Preview Otomatis: Total Modal (Amount) = Lot lembar × Average Buy -->
               <div class="mt-2.5 p-3 rounded-2xl bg-indigo-50/80 border border-indigo-100 flex items-center justify-between">
-                <span class="text-[11px] font-bold text-indigo-800">Estimasi Total Modal:</span>
+                <span class="text-[11px] font-bold text-indigo-800">Total Modal (Amount):</span>
                 <span id="inv-total-preview" class="text-sm font-extrabold text-indigo-950">Rp 0</span>
               </div>
             </div>
 
-            <!-- Catatan Opsional Investasi -->
+            <!-- Keterangan Opsional Investasi -->
             <div>
               <label for="inv-note" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                Catatan Pembelian <span class="text-slate-400 font-normal">(Opsional)</span>
+                Keterangan / Platform <span class="text-slate-400 font-normal">(Opsional)</span>
               </label>
               <input
                 type="text"
                 id="inv-note"
-                placeholder="Contoh: Cicil bulanan, Bibit, Tokocrypto..."
+                placeholder="Contoh: ajaib, bibit, binance..."
                 class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 transition"
               />
             </div>
           </div>
 
-          <!-- 4. TANGGAL TRANSAKSI (Today [Default] / Custom Calendar) -->
+          <!-- 4. TANGGAL TRANSAKSI (Today [Default] / Custom) -->
           <div>
             <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-              <span id="date-field-number">4.</span> Tanggal Transaksi
+              4. Tanggal Transaksi
             </label>
             <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-2.5">
               <label class="cursor-pointer">
@@ -575,7 +610,7 @@ function doPost(e) {
               <label class="cursor-pointer">
                 <input type="radio" name="tx-date-mode" value="custom" class="peer sr-only" onchange="handleDateModeChange()" />
                 <div class="py-2 px-3 rounded-lg text-center text-xs font-bold text-slate-500 peer-checked:bg-white peer-checked:text-indigo-600 peer-checked:shadow-xs transition">
-                  Custom Calendar
+                  Custom
                 </div>
               </label>
             </div>
@@ -605,18 +640,29 @@ function doPost(e) {
         </form>
 
         <!-- MINI RECENT PREVIEW -->
-      <!-- ==================== TAB 2: DASHBOARD REPORT (PAGINATED 3 PAGES) ==================== -->
+        <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Aktivitas Terbaru</h3>
+            <button type="button" onclick="switchTab('history')" class="text-xs font-bold text-indigo-600 hover:underline cursor-pointer">
+              Lihat Semua →
+            </button>
+          </div>
+          <div id="recent-mini-list" class="space-y-2.5"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: DASHBOARD (PAGINASI 3 HALAMAN TERPISAH) ==================== -->
       <section id="tab-dashboard" class="hidden p-5 space-y-4 animate-fade-up">
 
         <!-- Header & Sync Bar -->
         <div class="flex items-center justify-between gap-2">
           <div>
-            <h2 class="text-lg font-extrabold text-slate-900">Laporan Keuangan</h2>
+            <h2 class="text-lg font-extrabold text-slate-900">Dashboard Report</h2>
             <p class="text-xs text-slate-500" id="dash-subtitle">Halaman 1 dari 3 • Bulanan</p>
           </div>
           <button
             type="button"
-            onclick="syncFromGoogleSheet(true)"
+            onclick="syncAllSheets(true)"
             id="btn-refresh-dash"
             class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
@@ -627,7 +673,7 @@ function doPost(e) {
           </button>
         </div>
 
-        <!-- SUB-PAGE REPORT SELECTOR TABS (UX Pilihan Report) -->
+        <!-- PILL TABS PEMILIH HALAMAN REPORT -->
         <div class="grid grid-cols-3 gap-1.5 p-1.5 bg-slate-200/80 rounded-2xl">
           <button
             type="button"
@@ -651,13 +697,13 @@ function doPost(e) {
             id="dash-tab-btn-3"
             class="py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
           >
-            3. Investasi
+            3. Value Invest
           </button>
         </div>
 
-        <!-- ==================== DASHBOARD PAGE 1: BULANAN PENGELUARAN VS PEMASUKAN ==================== -->
+        <!-- ==================== HALAMAN 1: REPORT BULANAN (PENGELUARAN VS PEMASUKAN) ==================== -->
         <div id="dash-page-1" class="space-y-4 animate-fade-up">
-          <!-- Month Filter -->
+          <!-- Filter Periode Bulan -->
           <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
             <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
             <select
@@ -669,18 +715,18 @@ function doPost(e) {
             </select>
           </div>
 
-          <!-- KPI SUMMARY CARDS -->
+          <!-- Kartu Ringkasan KPI -->
           <div class="grid grid-cols-2 gap-3">
             <div class="bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
               <div class="flex items-center gap-1.5 text-emerald-700 text-xs font-bold">
-                <span>💰</span> Pemasukan
+                <span>💰</span> Total Pemasukan
               </div>
               <p id="kpi-income" class="text-base font-extrabold text-emerald-900 mt-1.5 truncate">Rp 0</p>
             </div>
 
             <div class="bg-rose-50 border border-rose-100 rounded-3xl p-4">
               <div class="flex items-center gap-1.5 text-rose-700 text-xs font-bold">
-                <span>💸</span> Pengeluaran
+                <span>💸</span> Total Pengeluaran
               </div>
               <p id="kpi-expense" class="text-base font-extrabold text-rose-900 mt-1.5 truncate">Rp 0</p>
             </div>
@@ -696,28 +742,28 @@ function doPost(e) {
             </div>
           </div>
 
-          <!-- REPORT 1 CARD -->
+          <!-- Grafik Batang Bulanan -->
           <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
             <div>
               <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
-                Report 1 • Page 1/3
+                Report 1 • Halaman 1/3
               </span>
               <h3 class="text-base font-extrabold text-slate-900 mt-2">Bulanan: Pengeluaran vs Pemasukan</h3>
-              <p class="text-xs text-slate-500">Perbandingan arus kas masuk dan keluar tiap bulan</p>
+              <p class="text-xs text-slate-500">Perbandingan arus kas masuk dan keluar tiap bulan (Sheet1)</p>
             </div>
 
             <div class="relative h-56 w-full">
               <canvas id="monthlyChart"></canvas>
             </div>
 
-            <!-- Monthly Breakdown Table -->
+            <!-- Daftar Rincian Per Bulan -->
             <div id="monthly-breakdown-list" class="divide-y divide-slate-100 pt-2"></div>
           </div>
         </div>
 
-        <!-- ==================== DASHBOARD PAGE 2: BERDASARKAN KATEGORI ==================== -->
+        <!-- ==================== HALAMAN 2: REPORT BERDASARKAN KATEGORI ==================== -->
         <div id="dash-page-2" class="hidden space-y-4 animate-fade-up">
-          <!-- Month Filter Page 2 -->
+          <!-- Filter Periode Bulan -->
           <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
             <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
             <select
@@ -733,12 +779,11 @@ function doPost(e) {
             <div class="flex items-start justify-between gap-2">
               <div>
                 <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
-                  Report 2 • Page 2/3
+                  Report 2 • Halaman 2/3
                 </span>
                 <h3 class="text-base font-extrabold text-slate-900 mt-2">Berdasarkan Kategori</h3>
               </div>
 
-              <!-- Toggle Pengeluaran / Pemasukan for Category Report -->
               <div class="flex bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
                 <button
                   type="button"
@@ -763,20 +808,20 @@ function doPost(e) {
               <canvas id="categoryChart"></canvas>
             </div>
 
-            <!-- Category Ranking List -->
+            <!-- Daftar Kategori dengan Nominal & Persentase Bar -->
             <div id="category-breakdown-list" class="space-y-3 pt-2"></div>
           </div>
         </div>
 
-        <!-- ==================== DASHBOARD PAGE 3: VALUE INVESTMENT TODAY ==================== -->
+        <!-- ==================== HALAMAN 3: VALUE INVESTMENT TODAY ==================== -->
         <div id="dash-page-3" class="hidden space-y-4 animate-fade-up">
 
-          <!-- Header Card & Refresh Google Price -->
+          <!-- Portfolio Summary Header -->
           <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 text-white rounded-3xl p-5 shadow-lg space-y-4">
             <div class="flex items-start justify-between gap-2">
               <div>
                 <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 bg-indigo-500/20 px-2.5 py-1 rounded-full">
-                  Report 3 • Page 3/3
+                  Report 3 • Halaman 3/3
                 </span>
                 <h3 class="text-lg font-extrabold mt-2">Value Investment Today</h3>
                 <p class="text-[11px] text-slate-400" id="invest-price-source">Sumber harga: Google Finance API</p>
@@ -788,13 +833,13 @@ function doPost(e) {
                 id="btn-refresh-price"
                 class="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shadow-sm transition shrink-0 cursor-pointer"
               >
-                ↻ Harga Google
+                ↻ Refresh Harga
               </button>
             </div>
 
             <div class="pt-2 border-t border-white/10 grid grid-cols-2 gap-3">
               <div>
-                <p class="text-[10px] font-semibold text-slate-400 uppercase">Total Nilai Hari Ini</p>
+                <p class="text-[10px] font-semibold text-slate-400 uppercase">Nilai Hari Ini</p>
                 <p id="inv-summary-current" class="text-base font-extrabold text-white mt-0.5">Rp 0</p>
               </div>
               <div>
@@ -802,23 +847,48 @@ function doPost(e) {
                 <p id="inv-summary-modal" class="text-base font-extrabold text-slate-300 mt-0.5">Rp 0</p>
               </div>
               <div class="col-span-2 bg-white/5 rounded-2xl p-3 flex items-center justify-between">
-                <span class="text-xs font-bold text-slate-300">Total Return Investasi</span>
+                <span class="text-xs font-bold text-slate-300">Total Return Portofolio</span>
                 <span id="inv-summary-return" class="text-sm font-extrabold text-slate-200">Rp 0</span>
               </div>
             </div>
           </div>
 
-          <!-- Asset Cards Container (BBCA/IDR & BTC/IDR) -->
+          <!-- Asset Cards (BBCA/IDR & BTC/IDR) -->
           <div id="investment-assets-container" class="space-y-3"></div>
 
-          <!-- Investment Purchase History -->
+          <!-- Manual Price Override Box (Sementara jika pasar tutup/offline) -->
+          <div id="manual-price-modal" class="hidden bg-white rounded-3xl p-4 border border-indigo-200 shadow-sm space-y-3">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-extrabold text-slate-900">Edit Harga Hari Ini (<span id="manual-price-code">BBCA/IDR</span>)</p>
+              <button type="button" onclick="closeManualPriceEditor()" class="text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            <div class="flex gap-2">
+              <input
+                type="text"
+                inputmode="numeric"
+                id="manual-price-input"
+                oninput="formatNominalInput(this)"
+                placeholder="Masukkan harga IDR..."
+                class="flex-1 px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm font-extrabold text-slate-900 focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                onclick="saveManualPrice()"
+                class="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
+              >
+                Terapkan
+              </button>
+            </div>
+          </div>
+
+          <!-- Riwayat Pembelian Investasi -->
           <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
-            <h4 class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Riwayat Pembelian Investasi</h4>
+            <h4 class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Catatan Sheet "Invest"</h4>
             <div id="investment-history-list" class="space-y-2.5"></div>
           </div>
         </div>
 
-        <!-- PAGINATION BAR (< Sebelumnya | Halaman X / 3 | Berikutnya >) -->
+        <!-- BOTTOM PAGINATION BAR (< Sebelumnya | Halaman X / 3 | Berikutnya >) -->
         <div class="bg-white rounded-2xl p-2.5 border border-slate-200 shadow-xs flex items-center justify-between">
           <button
             type="button"
@@ -842,12 +912,12 @@ function doPost(e) {
         </div>
       </section>
 
-      <!-- ==================== TAB 3: RIWAYAT TRANSAKSI ==================== -->
+      <!-- ==================== TAB 3: RIWAYAT (TRANSAKSI SHEET1 & INVESTASI INVEST) ==================== -->
       <section id="tab-history" class="hidden p-5 space-y-4 animate-fade-up">
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="text-lg font-extrabold text-slate-900">Riwayat Transaksi</h2>
-            <p class="text-xs text-slate-500" id="history-count-label">0 transaksi ditampilkan</p>
+            <h2 class="text-lg font-extrabold text-slate-900">Riwayat Data</h2>
+            <p class="text-xs text-slate-500" id="history-count-label">0 data ditampilkan</p>
           </div>
           <a
             href="https://docs.google.com/spreadsheets/d/18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI/edit?gid=0#gid=0"
@@ -859,6 +929,26 @@ function doPost(e) {
           </a>
         </div>
 
+        <!-- Sub-Tab Switcher: Transaksi (Sheet1) vs Investasi (Invest) -->
+        <div class="grid grid-cols-2 gap-1.5 p-1.5 bg-slate-200/80 rounded-2xl">
+          <button
+            type="button"
+            onclick="switchHistorySubTab('sheet1')"
+            id="hist-subtab-sheet1"
+            class="py-2 px-3 rounded-xl text-xs font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer"
+          >
+            Transaksi (Sheet1)
+          </button>
+          <button
+            type="button"
+            onclick="switchHistorySubTab('invest')"
+            id="hist-subtab-invest"
+            class="py-2 px-3 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
+          >
+            Investasi (Invest)
+          </button>
+        </div>
+
         <!-- Search & Filter Box -->
         <div class="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-sm space-y-2.5">
           <div class="relative">
@@ -866,7 +956,7 @@ function doPost(e) {
               type="text"
               id="hist-search-input"
               oninput="renderFullHistory()"
-              placeholder="Cari keterangan atau kategori..."
+              placeholder="Cari keterangan, kategori, atau saham..."
               class="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500"
             />
             <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -874,7 +964,7 @@ function doPost(e) {
             </svg>
           </div>
 
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-2 gap-2">
             <select
               id="hist-month-filter"
               onchange="renderFullHistory()"
@@ -884,22 +974,11 @@ function doPost(e) {
             </select>
 
             <select
-              id="hist-type-filter"
-              onchange="renderFullHistory()"
-              class="px-2.5 py-1.5 rounded-xl bg-slate-100 text-[11px] font-bold text-slate-700 focus:outline-none truncate"
-            >
-              <option value="ALL">Semua Tipe</option>
-              <option value="Pengeluaran">Pengeluaran</option>
-              <option value="Pemasukan">Pemasukan</option>
-              <option value="Invest">Invest</option>
-            </select>
-
-            <select
               id="hist-cat-filter"
               onchange="renderFullHistory()"
               class="px-2.5 py-1.5 rounded-xl bg-slate-100 text-[11px] font-bold text-slate-700 focus:outline-none truncate"
             >
-              <option value="ALL">Semua Kategori</option>
+              <option value="ALL">Semua Kategori / Saham</option>
             </select>
           </div>
         </div>
@@ -954,16 +1033,16 @@ function doPost(e) {
       </nav>
     </div>
 
-    <!-- ==================== SETTINGS MODAL (GOOGLE SHEET SYNC) ==================== -->
+    <!-- ==================== SETTINGS MODAL (GOOGLE APPS SCRIPT & DUAL-SYNC) ==================== -->
     <div id="settings-modal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4">
       <div class="w-full max-w-[400px] bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-fade-up max-h-[88vh] overflow-y-auto">
         <div class="flex items-center justify-between">
-          <h3 class="text-base font-extrabold text-slate-900">Koneksi Google Sheet</h3>
+          <h3 class="text-base font-extrabold text-slate-900">Pengaturan Google Sheet</h3>
           <button type="button" onclick="closeSettingsModal()" class="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer">✕</button>
         </div>
 
         <p class="text-xs text-slate-600 leading-relaxed">
-          Tempelkan <strong>URL Web App Google Apps Script</strong> di bawah ini agar transaksi masuk ke baris paling bawah pada Google Sheet Anda:
+          Pembacaan data otomatis berjalan lewat <strong>Google Sheets API (gviz)</strong>. Untuk menyimpan transaksi baru & harga <code>GOOGLEFINANCE</code> langsung ke <strong>Sheet1</strong> dan <strong>Invest</strong>, tempelkan URL Web App Apps Script di bawah:
         </p>
 
         <div>
@@ -1006,12 +1085,12 @@ function doPost(e) {
 
         <div class="pt-2 border-t border-slate-100 space-y-2">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Extensions &gt; Apps Script)</span>
+            <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Code.gs)</span>
             <button type="button" onclick="copyAppsScriptCode()" class="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer">
-              Salin Kode
+              Salin Kode Apps Script
             </button>
           </div>
-          <pre id="apps-script-preview" class="p-3 rounded-xl bg-slate-900 text-slate-200 text-[10px] overflow-x-auto leading-relaxed"></pre>
+          <pre id="apps-script-preview" class="p-3 rounded-xl bg-slate-900 text-slate-200 text-[10px] overflow-x-auto leading-relaxed max-h-48"></pre>
         </div>
       </div>
     </div>
@@ -1021,8 +1100,9 @@ function doPost(e) {
   <!-- ==================== JAVASCRIPT APPLICATION LOGIC ==================== -->
   <script>
     // =========================================================================
-    // 1. KONFIGURASI DEFAULT & KATEGORI
+    // 1. KONFIGURASI SPREADSHEET & KATEGORI DEFAULT
     // =========================================================================
+    const SPREADSHEET_ID = "18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI";
     const DEFAULT_SCRIPT_URL = "";
 
     const DEFAULT_EXPENSE_CATEGORIES = [
@@ -1047,23 +1127,26 @@ function doPost(e) {
 
     // State Aplikasi
     let currentUser = null;
-    let transactions = [];
+    let sheet1Transactions = []; // Sheet1: 7 kolom A:G
+    let investTransactions = []; // Invest: 10 kolom A:J
     let customCategories = [];
     let categoryReportType = "Pengeluaran";
+    let historySubTab = "sheet1";
     let historyUserFilter = "ALL";
     let currentDashboardPage = 1;
     let monthlyChartInstance = null;
     let categoryChartInstance = null;
+    let editingManualAssetCode = null;
 
-    // Harga Pasar Live untuk Investasi (BBCA/IDR & BTC/IDR)
+    // Harga Pasar Hari Ini (BBCA/IDR & BTC/IDR)
     let liveMarketPrices = {
       "BBCA/IDR": 0,
       "BTC/IDR": 0
     };
-    let priceSourceLabel = "Menunggu pembaruan harga Google...";
+    let priceSourceLabel = "Google Finance & Market API";
 
     // =========================================================================
-    // 2. INISIALISASI HALAMAN (Aman terhadap cache rusak)
+    // 2. INISIALISASI DOM & ANTI BLANK SCREEN
     // =========================================================================
     document.addEventListener("DOMContentLoaded", function () {
       try {
@@ -1080,65 +1163,64 @@ function doPost(e) {
           });
         }
 
-        const options = { weekday: "long", day: "numeric", month: "short", year: "numeric" };
         const headerDateEl = document.getElementById("header-date");
         if (headerDateEl) {
-          headerDateEl.textContent = new Date().toLocaleDateString("id-ID", options);
+          headerDateEl.textContent = new Date().toLocaleDateString("id-ID", {
+            weekday: "long",
+            day: "numeric",
+            month: "short",
+            year: "numeric"
+          });
         }
 
-        // Isi preview Apps Script dari hidden textarea
         const tpl = document.getElementById("appsScriptTemplate");
         const preview = document.getElementById("apps-script-preview");
-        if (tpl && preview) {
-          preview.textContent = tpl.value;
-        }
-      } catch (e) {
-        // Ignore non-critical UI init error
-      }
+        if (tpl && preview) preview.textContent = tpl.value;
+      } catch (e) {}
 
-      // Muat data localStorage dalam try/catch agar tidak pernah memblokir login
+      // Muat cache lokal secara aman
       loadLocalStateSafe();
 
-      // Cek sesi login tersimpan
+      // Pastikan screen awal langsung tampil (anti blank screen)
       try {
         const savedUser = (localStorage.getItem("kv_finance_user") || "").trim().toLowerCase();
         if (savedUser === "kevin") {
           loginSuccess("Kevin");
         } else if (savedUser === "vivie") {
           loginSuccess("Vivie");
+        } else {
+          showLoginScreen();
         }
       } catch (err) {
-        try { localStorage.clear(); } catch (e) {}
+        showLoginScreen();
       }
     });
 
+    function showLoginScreen() {
+      const loginEl = document.getElementById("loginScreen");
+      const mainEl = document.getElementById("mainScreen");
+      if (loginEl) loginEl.classList.remove("hidden");
+      if (mainEl) mainEl.classList.add("hidden");
+    }
+
     function loadLocalStateSafe() {
       try {
-        const rawTx = localStorage.getItem("kv_finance_transactions");
-        if (rawTx) {
-          const parsedTx = JSON.parse(rawTx);
-          if (Array.isArray(parsedTx)) {
-            transactions = parsedTx
-              .map(normalizeTransactionRow)
-              .filter(function (t) { return t.tanggal || t.nominal > 0; });
-          }
+        const rawS1 = localStorage.getItem("kv_v2_sheet1");
+        if (rawS1) {
+          const parsed = JSON.parse(rawS1);
+          if (Array.isArray(parsed)) sheet1Transactions = parsed;
         }
-
-        const rawCats = localStorage.getItem("kv_finance_categories");
+        const rawInv = localStorage.getItem("kv_v2_invest");
+        if (rawInv) {
+          const parsedInv = JSON.parse(rawInv);
+          if (Array.isArray(parsedInv)) investTransactions = parsedInv;
+        }
+        const rawCats = localStorage.getItem("kv_v2_categories");
         if (rawCats) {
           const parsedCats = JSON.parse(rawCats);
-          if (Array.isArray(parsedCats)) {
-            customCategories = Array.from(
-              new Set(
-                parsedCats
-                  .map(function (c) { return String(c).trim().toUpperCase(); })
-                  .filter(Boolean)
-              )
-            );
-          }
+          if (Array.isArray(parsedCats)) customCategories = parsedCats;
         }
-
-        const rawPrices = localStorage.getItem("kv_finance_market_prices");
+        const rawPrices = localStorage.getItem("kv_v2_prices");
         if (rawPrices) {
           const parsedPrices = JSON.parse(rawPrices);
           if (parsedPrices && typeof parsedPrices === "object") {
@@ -1147,20 +1229,19 @@ function doPost(e) {
           }
         }
       } catch (err) {
-        try { localStorage.clear(); } catch (e) {}
-        transactions = [];
+        sheet1Transactions = [];
+        investTransactions = [];
         customCategories = [];
       }
     }
 
     function saveLocalState() {
       try {
-        localStorage.setItem("kv_finance_transactions", JSON.stringify(transactions));
-        localStorage.setItem("kv_finance_categories", JSON.stringify(customCategories));
-        localStorage.setItem("kv_finance_market_prices", JSON.stringify(liveMarketPrices));
-      } catch (err) {
-        // Ignore quota/storage errors
-      }
+        localStorage.setItem("kv_v2_sheet1", JSON.stringify(sheet1Transactions));
+        localStorage.setItem("kv_v2_invest", JSON.stringify(investTransactions));
+        localStorage.setItem("kv_v2_categories", JSON.stringify(customCategories));
+        localStorage.setItem("kv_v2_prices", JSON.stringify(liveMarketPrices));
+      } catch (err) {}
     }
 
     function getTodayISO() {
@@ -1180,16 +1261,36 @@ function doPost(e) {
       }
     }
 
+    function getNowWIBTimestamp() {
+      try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "Asia/Jakarta",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false
+        }).formatToParts(new Date());
+        const get = function (t) { return parts.find(function (p) { return p.type === t; }).value; };
+        const hr = get("hour") === "24" ? "00" : get("hour");
+        return get("year") + "-" + get("month") + "-" + get("day") + " " + hr + ":" + get("minute") + ":" + get("second");
+      } catch (e) {
+        return getTodayISO() + " 12:00:00";
+      }
+    }
+
     function getScriptUrl() {
       try {
-        return localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL;
+        return (localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL).trim();
       } catch (err) {
         return DEFAULT_SCRIPT_URL;
       }
     }
 
     // =========================================================================
-    // 3. SISTEM LOGIN & AUTENTIKASI (Kevin & Vivie Case-Insensitive)
+    // 3. LOGIN & AUTHENTICATION (Kevin / Kevin & Vivie / Vivie)
     // =========================================================================
     function togglePasswordVisibility() {
       const pwdInput = document.getElementById("login-password");
@@ -1223,17 +1324,12 @@ function doPost(e) {
         const rawPass = (passEl ? passEl.value : "").trim().toLowerCase();
 
         let canonicalUser = null;
-        if (rawUser === "kevin" && rawPass === "kevin") {
-          canonicalUser = "Kevin";
-        } else if (rawUser === "vivie" && rawPass === "vivie") {
-          canonicalUser = "Vivie";
-        }
+        if (rawUser === "kevin" && rawPass === "kevin") canonicalUser = "Kevin";
+        else if (rawUser === "vivie" && rawPass === "vivie") canonicalUser = "Vivie";
 
         if (canonicalUser) {
           if (errorBox) errorBox.classList.add("hidden");
-          try {
-            localStorage.setItem("kv_finance_user", canonicalUser);
-          } catch (e) {}
+          try { localStorage.setItem("kv_finance_user", canonicalUser); } catch (e) {}
           loginSuccess(canonicalUser);
         } else {
           if (errorBox) errorBox.classList.remove("hidden");
@@ -1259,80 +1355,91 @@ function doPost(e) {
           ? "w-10 h-10 rounded-2xl bg-indigo-500 flex items-center justify-center font-extrabold text-base shadow-inner"
           : "w-10 h-10 rounded-2xl bg-pink-500 flex items-center justify-center font-extrabold text-base shadow-inner";
 
-      document.getElementById("login-view").classList.add("hidden");
-      document.getElementById("main-view").classList.remove("hidden");
+      document.getElementById("loginScreen").classList.add("hidden");
+      document.getElementById("mainScreen").classList.remove("hidden");
 
-      updateConnectionUI();
-      refreshCategoryDropdown();
-      renderRecentMiniList();
-      populateMonthFilter();
-      populateHistoryFilters();
+      // Render langsung dari cache lokal terlebih dahulu (anti layar kosong)
+      safeRenderAllUI();
 
-      if (getScriptUrl()) {
-        syncFromGoogleSheet(false);
-      } else {
-        refreshInvestmentPrices(false);
-      }
+      // Lakukan Dual-Fetch dari Google Sheet di background
+      syncAllSheets(false);
     }
 
     function logout() {
-      try {
-        localStorage.removeItem("kv_finance_user");
-      } catch (e) {}
+      try { localStorage.removeItem("kv_finance_user"); } catch (e) {}
       currentUser = null;
       const passEl = document.getElementById("login-password");
       if (passEl) passEl.value = "";
-      document.getElementById("main-view").classList.add("hidden");
-      document.getElementById("login-view").classList.remove("hidden");
+      showLoginScreen();
     }
 
     // =========================================================================
-    // 4. PARSER & NORMALIZER DATA GOOGLE SHEET (Kolom A..F)
+    // 4. DATE & NUMBER PARSERS (Mendukung Format Campuran Sheet1 & gviz)
     // =========================================================================
-    function parseNominalValue(val) {
+    function cleanNumericAmount(val) {
       if (typeof val === "number") return isFinite(val) ? Math.round(val) : 0;
       if (val === null || val === undefined) return 0;
       let s = String(val).trim().replace(/^rp\s*/i, "");
+      // Bersihkan desimal .00 atau ,00 di akhir seperti "20,000.00" -> "20,000" -> 20000
       s = s.replace(/[.,]00$/, "");
       const digits = s.replace(/[^\d-]/g, "");
       return Number(digits) || 0;
     }
 
-    function parseSheetDateToISO(rawVal) {
+    function cleanFloatAmount(val) {
+      if (typeof val === "number") return isFinite(val) ? val : 0;
+      if (val === null || val === undefined) return 0;
+      const s = String(val).trim().replace(/,/g, "");
+      const num = parseFloat(s);
+      return isFinite(num) ? num : 0;
+    }
+
+    function parseFlexibleDateToISO(rawVal) {
       if (!rawVal) return "";
       const s = String(rawVal).trim();
 
-      // 1. Format 7 atau 8 digit ddmmyyyy (contoh: '01122025' atau '1122025')
+      // 1. Format gviz Date(YYYY,M_zero_based,D)
+      const gvizMatch = s.match(/^Date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})/);
+      if (gvizMatch) {
+        const y = gvizMatch[1];
+        const m = String(parseInt(gvizMatch[2], 10) + 1).padStart(2, "0");
+        const d = String(parseInt(gvizMatch[3], 10)).padStart(2, "0");
+        return y + "-" + m + "-" + d;
+      }
+
+      // 2. Format YYYY-MM-DD (atau YYYY-MM-DD HH:mm:ss)
+      const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (isoMatch) {
+        return isoMatch[1] + "-" + isoMatch[2].padStart(2, "0") + "-" + isoMatch[3].padStart(2, "0");
+      }
+
+      // 3. Format Slash atau Dash: M/D/YYYY (contoh: "12/1/2025", "1/1/2026") atau D/M/YYYY
+      const slashMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (slashMatch) {
+        const p1 = parseInt(slashMatch[1], 10);
+        const p2 = parseInt(slashMatch[2], 10);
+        const yyyy = slashMatch[3];
+        if (p1 > 12 && p2 >= 1 && p2 <= 12) {
+          // D/M/YYYY (contoh: 20/11/2026)
+          return yyyy + "-" + String(p2).padStart(2, "0") + "-" + String(p1).padStart(2, "0");
+        } else if (p1 >= 1 && p1 <= 12 && p2 >= 1 && p2 <= 31) {
+          // M/D/YYYY (contoh: 12/1/2025 -> 2025-12-01, 1/1/2026 -> 2026-01-01)
+          return yyyy + "-" + String(p1).padStart(2, "0") + "-" + String(p2).padStart(2, "0");
+        }
+      }
+
+      // 4. Format 7 atau 8 digit ddmmyyyy (contoh: "01122025")
       if (/^\d{7,8}$/.test(s)) {
         const padded = s.padStart(8, "0");
         const dd = padded.slice(0, 2);
         const mm = padded.slice(2, 4);
         const yyyy = padded.slice(4, 8);
-        const mNum = parseInt(mm, 10);
-        const dNum = parseInt(dd, 10);
-        const yNum = parseInt(yyyy, 10);
-        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31 && yNum >= 2000) {
-          return yyyy + "-" + mm + "-" + dd;
-        }
-      }
-
-      // 2. Format YYYY-MM-DD
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-        return s;
-      }
-
-      // 3. Format DD/MM/YYYY atau DD-MM-YYYY
-      const slashMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-      if (slashMatch) {
-        const dd = slashMatch[1].padStart(2, "0");
-        const mm = slashMatch[2].padStart(2, "0");
-        const yyyy = slashMatch[3];
         if (parseInt(mm, 10) >= 1 && parseInt(mm, 10) <= 12) {
           return yyyy + "-" + mm + "-" + dd;
         }
       }
 
-      // 4. ISO Timestamp dari Google Sheets Date Object (WIB Asia/Jakarta)
+      // 5. Timestamp ISO/GMT
       if (s.includes("T") || s.includes("GMT") || s.includes("Z")) {
         const d = new Date(s);
         if (!isNaN(d.getTime())) {
@@ -1343,119 +1450,298 @@ function doPost(e) {
               month: "2-digit",
               day: "2-digit"
             }).formatToParts(d);
-            const yPart = parts.find(function (p) { return p.type === "year"; });
-            const mPart = parts.find(function (p) { return p.type === "month"; });
-            const dPart = parts.find(function (p) { return p.type === "day"; });
-            if (yPart && mPart && dPart) {
-              return yPart.value + "-" + mPart.value + "-" + dPart.value;
-            }
-          } catch (e) {
-            const wib = new Date(d.getTime() + 7 * 3600 * 1000);
-            return wib.toISOString().split("T")[0];
-          }
+            const y = parts.find(function (p) { return p.type === "year"; }).value;
+            const m = parts.find(function (p) { return p.type === "month"; }).value;
+            const day = parts.find(function (p) { return p.type === "day"; }).value;
+            return y + "-" + m + "-" + day;
+          } catch (e) {}
         }
       }
 
       return "";
     }
 
-    function formatISOToDDMMYYYY(isoDate) {
-      if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return "";
-      const parts = isoDate.split("-");
-      return parts[2] + parts[1] + parts[0];
-    }
-
-    function normalizeTransactionRow(raw) {
-      if (!raw || typeof raw !== "object") {
-        return {
-          tanggal: "",
-          date: "",
-          type: "Pengeluaran",
-          nominal: 0,
-          keterangan: "",
-          kategori: "OTHER",
-          user: "",
-          kodeInvest: "",
-          lot: 0,
-          avgPrice: 0
-        };
-      }
-
-      // Deteksi otomatis jika payload berasal dari Apps Script versi lama
-      const isLegacyShifted =
-        raw.tanggal &&
-        /^\d+$/.test(String(raw.tanggal).trim()) &&
-        String(raw.tanggal).trim().length !== 8 &&
-        raw.keterangan &&
-        /^\d{7,8}$/.test(String(raw.keterangan).trim());
-
-      if (isLegacyShifted) {
-        const iso = parseSheetDateToISO(raw.keterangan);
-        return {
-          tanggal: iso,
-          date: formatISOToDDMMYYYY(iso),
-          nominal: parseNominalValue(raw.tanggal),
-          keterangan: String(raw.type || "").trim(),
-          kategori: String(raw.kategori || "OTHER").trim().toUpperCase() || "OTHER",
-          type: String(raw.user || "").trim().toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
-          user: "",
-          kodeInvest: "",
-          lot: 0,
-          avgPrice: 0
-        };
-      }
-
-      const isoDate = parseSheetDateToISO(raw.date || raw.tanggal || raw.Date || "");
-      const rawType = String(raw.type || raw.Type || "").trim().toLowerCase();
-      let type = "Pengeluaran";
-      if (rawType === "pemasukan") type = "Pemasukan";
-      else if (rawType === "invest") type = "Invest";
-
-      const kategori = String(raw.kategori || raw.Kategori || "OTHER").trim().toUpperCase() || "OTHER";
-      const kodeInvest = String(raw.kodeInvest || raw.Kode_Invest || "").trim().toUpperCase();
-      const lot = parseFloat(String(raw.lot || raw.Lot || "0").replace(",", ".")) || 0;
-      const avgPrice = parseNominalValue(raw.avgPrice !== undefined ? raw.avgPrice : raw.Avg_Price);
-      let nominal = parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran);
-
-      if (type === "Invest" && nominal === 0 && lot > 0 && avgPrice > 0) {
-        nominal = Math.round(lot * avgPrice);
-      }
-
-      return {
-        tanggal: isoDate,
-        date: formatISOToDDMMYYYY(isoDate) || String(raw.date || ""),
-        nominal: nominal,
-        keterangan: String(raw.keterangan || raw.Keterangan || "").trim(),
-        kategori: kategori,
-        type: type,
-        user: String(raw.user || raw.User || "").trim(),
-        kodeInvest: kodeInvest,
-        lot: lot,
-        avgPrice: avgPrice
-      };
-    }
-
     // =========================================================================
-    // 5. KONEKSI & SINKRONISASI GOOGLE SHEET
+    // 5. DUAL-FETCH ENGINE (APPS SCRIPT PRIMARY + GVIZ PUBLIC FALLBACK)
     // =========================================================================
-    function updateConnectionUI() {
-      const url = getScriptUrl();
+    function setConnectionStatus(mode, title, subtitle) {
       const badge = document.getElementById("sync-badge");
-      const setupAlert = document.getElementById("setup-alert");
+      const banner = document.getElementById("connectionBanner");
+      const bannerTitle = document.getElementById("bannerTitle");
+      const bannerSub = document.getElementById("bannerSubtitle");
 
-      if (url) {
-        badge.className =
-          "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300";
-        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Google Sheet Aktif';
-        setupAlert.classList.add("hidden");
+      if (mode === "apps_script") {
+        if (badge) {
+          badge.className = "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300";
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Apps Script Aktif';
+        }
+        if (banner) banner.classList.add("hidden");
+      } else if (mode === "gviz") {
+        if (badge) {
+          badge.className = "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300";
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span> Sheet Read-Sync';
+        }
+        if (banner && !getScriptUrl()) {
+          banner.classList.remove("hidden");
+          if (bannerTitle) bannerTitle.textContent = "Tersinkronisasi (Mode Baca Sheet)";
+          if (bannerSub) bannerSub.textContent = "Setup Apps Script URL agar input baru langsung tertulis ke Sheet.";
+        } else if (banner) {
+          banner.classList.add("hidden");
+        }
       } else {
-        badge.className =
-          "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300";
-        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Mode Lokal';
-        setupAlert.classList.remove("hidden");
+        if (badge) {
+          badge.className = "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300";
+          badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Mode Lokal';
+        }
+        if (banner) {
+          banner.classList.remove("hidden");
+          if (bannerTitle) bannerTitle.textContent = title || "Gagal mengambil data Google Sheet";
+          if (bannerSub) bannerSub.textContent = subtitle || "Menampilkan data terakhir dari cache lokal.";
+        }
       }
     }
 
+    async function fetchGvizSheet(sheetName) {
+      const url =
+        "https://docs.google.com/spreadsheets/d/" +
+        SPREADSHEET_ID +
+        "/gviz/tq?tqx=out:json&sheet=" +
+        encodeURIComponent(sheetName);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const text = await res.text();
+      const firstBrace = text.indexOf("{");
+      const lastBrace = text.lastIndexOf("}");
+      if (firstBrace === -1 || lastBrace === -1) throw new Error("Format gviz tidak valid");
+      const json = JSON.parse(text.substring(firstBrace, lastBrace + 1));
+      if (!json.table || !Array.isArray(json.table.rows)) return [];
+      return json.table.rows;
+    }
+
+    function parseGvizSheet1Rows(rows) {
+      const list = [];
+      rows.forEach(function (row) {
+        const c = row.c || [];
+        const rawDateCell = c[0] ? (c[0].f || c[0].v || "") : "";
+        const rawTypeCell = c[1] ? String(c[1].v || c[1].f || "").trim() : "";
+        const rawAmtCell = c[2] ? (c[2].v !== null && c[2].v !== undefined ? c[2].v : c[2].f) : 0;
+        const rawKetCell = c[3] ? String(c[3].v || c[3].f || "").trim() : "";
+        const rawKatCell = c[4] ? String(c[4].v || c[4].f || "").trim() : "";
+        const rawUserCell = c[5] ? String(c[5].v || c[5].f || "").trim() : "";
+        const rawTsCell = c[6] ? String(c[6].f || c[6].v || "").trim() : "";
+
+        // Skip header row jika ikut terbaca
+        if (
+          String(rawDateCell).toLowerCase() === "date" ||
+          rawTypeCell.toLowerCase() === "type"
+        ) {
+          return;
+        }
+
+        const isoDate = parseFlexibleDateToISO(rawDateCell);
+        const amount = cleanNumericAmount(rawAmtCell);
+        if (!isoDate && amount === 0 && !rawKetCell) return;
+
+        const type = rawTypeCell.toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran";
+        const kategori = (rawKatCell || "OTHER").toUpperCase();
+
+        list.push({
+          date: isoDate,
+          type: type,
+          amount: amount,
+          keterangan: rawKetCell,
+          kategori: kategori,
+          user: rawUserCell,
+          timestamp: rawTsCell
+        });
+      });
+      return list;
+    }
+
+    function parseGvizInvestRows(rows) {
+      const list = [];
+      rows.forEach(function (row) {
+        const c = row.c || [];
+        // Kolom A:Date, B:Type, C:Amount, D:Lot lembar, E:Average Buy, F:Saham, G:Keterangan, H:Kategori, I:user, J:Timestamp
+        const rawDateCell = c[0] ? (c[0].f || c[0].v || "") : "";
+        const rawTypeCell = c[1] ? String(c[1].v || c[1].f || "").trim() : "";
+        const rawAmtCell = c[2] ? (c[2].v !== null && c[2].v !== undefined ? c[2].v : c[2].f) : 0;
+        const rawLotCell = c[3] ? (c[3].v !== null && c[3].v !== undefined ? c[3].v : c[3].f) : 0;
+        const rawAvgCell = c[4] ? (c[4].v !== null && c[4].v !== undefined ? c[4].v : c[4].f) : 0;
+        const rawSahamCell = c[5] ? String(c[5].v || c[5].f || "").trim() : "";
+        const rawKetCell = c[6] ? String(c[6].v || c[6].f || "").trim() : "";
+        const rawKatCell = c[7] ? String(c[7].v || c[7].f || "").trim() : "";
+        const rawUserCell = c[8] ? String(c[8].v || c[8].f || "").trim() : "";
+        const rawTsCell = c[9] ? String(c[9].f || c[9].v || "").trim() : "";
+
+        if (
+          String(rawDateCell).toLowerCase() === "date" ||
+          rawTypeCell.toLowerCase() === "type" ||
+          rawSahamCell.toLowerCase() === "saham"
+        ) {
+          return;
+        }
+
+        const isoDate = parseFlexibleDateToISO(rawDateCell);
+        const lot = cleanFloatAmount(rawLotCell);
+        const avgPrice = cleanNumericAmount(rawAvgCell);
+        let amount = cleanNumericAmount(rawAmtCell);
+        if (amount === 0 && lot > 0 && avgPrice > 0) {
+          amount = Math.round(lot * avgPrice);
+        }
+        const saham = rawSahamCell.toUpperCase();
+
+        if (!saham && lot === 0 && amount === 0) return;
+
+        list.push({
+          date: isoDate,
+          type: "Invest",
+          amount: amount,
+          lot: lot,
+          avgPrice: avgPrice,
+          saham: saham,
+          keterangan: rawKetCell,
+          kategori: (rawKatCell || "INVEST").toUpperCase(),
+          user: rawUserCell,
+          timestamp: rawTsCell
+        });
+      });
+      return list;
+    }
+
+    async function syncAllSheets(showNotification) {
+      if (showNotification === undefined) showNotification = true;
+      const btn = document.getElementById("btn-refresh-dash");
+      if (btn) btn.classList.add("opacity-50", "pointer-events-none");
+
+      const scriptUrl = getScriptUrl();
+      let fetchedSuccessfully = false;
+
+      // 1. UTAMA: Coba fetch dari Google Apps Script Web App URL (GET tanpa custom headers)
+      if (scriptUrl) {
+        try {
+          const res = await fetch(scriptUrl, { method: "GET", redirect: "follow" });
+          const json = await res.json();
+          if (json && json.status === "success") {
+            if (Array.isArray(json.sheet1)) {
+              sheet1Transactions = json.sheet1.map(function (r) {
+                return {
+                  date: parseFlexibleDateToISO(r.date),
+                  type: String(r.type || "").toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
+                  amount: cleanNumericAmount(r.amount),
+                  keterangan: String(r.keterangan || "").trim(),
+                  kategori: String(r.kategori || "OTHER").trim().toUpperCase(),
+                  user: String(r.user || "").trim(),
+                  timestamp: String(r.timestamp || "").trim()
+                };
+              });
+            }
+            if (Array.isArray(json.invest)) {
+              investTransactions = json.invest.map(function (r) {
+                const lot = cleanFloatAmount(r.lot);
+                const avgPrice = cleanNumericAmount(r.avgPrice);
+                let amount = cleanNumericAmount(r.amount);
+                if (amount === 0 && lot > 0 && avgPrice > 0) amount = Math.round(lot * avgPrice);
+                return {
+                  date: parseFlexibleDateToISO(r.date),
+                  type: "Invest",
+                  amount: amount,
+                  lot: lot,
+                  avgPrice: avgPrice,
+                  saham: String(r.saham || "").trim().toUpperCase(),
+                  keterangan: String(r.keterangan || "").trim(),
+                  kategori: String(r.kategori || "INVEST").trim().toUpperCase(),
+                  user: String(r.user || "").trim(),
+                  timestamp: String(r.timestamp || "").trim()
+                };
+              });
+            }
+            if (json.prices && typeof json.prices === "object") {
+              if (Number(json.prices["BBCA/IDR"]) > 0) liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+              if (Number(json.prices["BTC/IDR"]) > 0) liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
+              priceSourceLabel = "Google Finance (Apps Script) • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+            }
+            syncCategoriesFromData();
+            saveLocalState();
+            setConnectionStatus("apps_script");
+            fetchedSuccessfully = true;
+            if (showNotification) {
+              showToast("Sync Apps Script berhasil (" + sheet1Transactions.length + " transaksi, " + investTransactions.length + " invest)!", "✅");
+            }
+          }
+        } catch (err) {
+          // Lanjut otomatis ke Fallback gviz
+        }
+      }
+
+      // 2. CADANGAN OTOMATIS (FALLBACK): Google Sheets Visualization API (gviz)
+      if (!fetchedSuccessfully) {
+        try {
+          const results = await Promise.allSettled([
+            fetchGvizSheet("Sheet1"),
+            fetchGvizSheet("Invest")
+          ]);
+
+          let anyGvizOk = false;
+          if (results[0].status === "fulfilled") {
+            sheet1Transactions = parseGvizSheet1Rows(results[0].value);
+            anyGvizOk = true;
+          }
+          if (results[1].status === "fulfilled") {
+            investTransactions = parseGvizInvestRows(results[1].value);
+            anyGvizOk = true;
+          }
+
+          if (anyGvizOk) {
+            syncCategoriesFromData();
+            saveLocalState();
+            setConnectionStatus("gviz");
+            fetchedSuccessfully = true;
+            if (showNotification) {
+              showToast("Data diambil dari Google Sheet (" + sheet1Transactions.length + " transaksi, " + investTransactions.length + " invest)!", "✅");
+            }
+          } else {
+            throw new Error("gviz gagal");
+          }
+        } catch (fallbackErr) {
+          setConnectionStatus(
+            "offline",
+            "Gagal mengambil data Google Sheet",
+            "Menampilkan data cache lokal. Klik Coba Lagi atau Pengaturan."
+          );
+          if (showNotification) {
+            showToast("Gagal mengambil data Google Sheet, memakai cache lokal", "⚠️");
+          }
+        }
+      }
+
+      safeRenderAllUI();
+      await refreshInvestmentPrices(false);
+
+      if (btn) btn.classList.remove("opacity-50", "pointer-events-none");
+    }
+
+    function syncCategoriesFromData() {
+      sheet1Transactions.forEach(function (row) {
+        if (row.kategori && customCategories.indexOf(row.kategori) === -1) {
+          customCategories.push(row.kategori);
+        }
+      });
+    }
+
+    function safeRenderAllUI() {
+      try { refreshCategoryDropdown(); } catch (e) {}
+      try { populateMonthFilter(); } catch (e) {}
+      try { populateHistoryFilters(); } catch (e) {}
+      try { renderRecentMiniList(); } catch (e) {}
+      try { renderDashboard(); } catch (e) {}
+      try { renderInvestmentReport(); } catch (e) {}
+      try { renderFullHistory(); } catch (e) {}
+    }
+
+    // =========================================================================
+    // 6. SETTINGS MODAL & TEST CONNECTION
+    // =========================================================================
     function openSettingsModal() {
       document.getElementById("script-url-input").value = getScriptUrl();
       const tpl = document.getElementById("appsScriptTemplate");
@@ -1470,16 +1756,9 @@ function doPost(e) {
 
     function saveScriptUrl() {
       const val = document.getElementById("script-url-input").value.trim();
-      try {
-        localStorage.setItem("kv_finance_script_url", val);
-      } catch (e) {}
-      updateConnectionUI();
+      try { localStorage.setItem("kv_finance_script_url", val); } catch (e) {}
       closeSettingsModal();
-      if (val) {
-        syncFromGoogleSheet(true);
-      } else {
-        showToast("URL dihapus, berjalan dalam mode lokal", "ℹ️");
-      }
+      syncAllSheets(true);
     }
 
     function copyAppsScriptCode() {
@@ -1521,92 +1800,33 @@ function doPost(e) {
       btn.disabled = true;
       btn.textContent = "Menguji...";
       resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-slate-100 text-slate-600";
-      resultBox.textContent = "Menghubungkan ke Google Sheet...";
+      resultBox.textContent = "Menghubungkan ke Apps Script...";
       resultBox.classList.remove("hidden");
 
       try {
-        const res = await fetch(inputUrl);
+        const res = await fetch(inputUrl, { method: "GET", redirect: "follow" });
         const json = await res.json();
-        if (json.status === "success" && Array.isArray(json.data)) {
+        if (json && json.status === "success") {
           try { localStorage.setItem("kv_finance_script_url", inputUrl); } catch (e) {}
-          updateConnectionUI();
-          const normalized = json.data.map(normalizeTransactionRow);
+          const s1Count = Array.isArray(json.sheet1) ? json.sheet1.length : 0;
+          const invCount = Array.isArray(json.invest) ? json.invest.length : 0;
           resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
-          resultBox.textContent = "✅ Terhubung! Ditemukan " + normalized.length + " baris transaksi di Google Sheet.";
-          await syncFromGoogleSheet(false);
+          resultBox.textContent = "✅ Terhubung! Sheet1: " + s1Count + " baris, Invest: " + invCount + " baris.";
+          await syncAllSheets(false);
         } else {
-          throw new Error("Format respon tidak sesuai");
+          throw new Error("Respon tidak valid");
         }
       } catch (err) {
         resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200";
-        resultBox.textContent = "❌ Gagal terhubung. Pastikan Web App di-deploy dengan akses 'Anyone'.";
+        resultBox.textContent = "❌ Gagal terhubung ke Apps Script. Pastikan akses Web App = 'Anyone'.";
       } finally {
         btn.disabled = false;
         btn.textContent = "Tes Koneksi";
       }
     }
 
-    async function syncFromGoogleSheet(showNotification) {
-      if (showNotification === undefined) showNotification = true;
-      const url = getScriptUrl();
-      if (!url) return;
-
-      const btn = document.getElementById("btn-refresh-dash");
-      if (btn) btn.classList.add("opacity-50", "pointer-events-none");
-
-      try {
-        const res = await fetch(url);
-        const json = await res.json();
-        if (json.status === "success" && Array.isArray(json.data)) {
-          transactions = json.data.map(normalizeTransactionRow);
-          transactions.forEach(function (row) {
-            if (row.kategori && customCategories.indexOf(row.kategori) === -1) {
-              customCategories.push(row.kategori);
-            }
-          });
-
-          // Ambil harga GOOGLEFINANCE jika tersedia dari Apps Script
-          if (json.prices && typeof json.prices === "object") {
-            let hasSheetPrice = false;
-            if (Number(json.prices["BBCA/IDR"]) > 0) {
-              liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
-              hasSheetPrice = true;
-            }
-            if (Number(json.prices["BTC/IDR"]) > 0) {
-              liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
-              hasSheetPrice = true;
-            }
-            if (hasSheetPrice) {
-              priceSourceLabel = "Google Finance (Sheet) • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-            }
-          }
-
-          saveLocalState();
-          refreshCategoryDropdown();
-          populateMonthFilter();
-          populateHistoryFilters();
-          renderRecentMiniList();
-          renderDashboard();
-          renderFullHistory();
-
-          // Lengkapi harga yang masih 0 lewat API Google / Live Market di browser
-          await refreshInvestmentPrices(false);
-
-          if (showNotification) {
-            showToast("Sinkronisasi berhasil (" + transactions.length + " data)!", "✅");
-          }
-        }
-      } catch (err) {
-        if (showNotification) {
-          showToast("Gagal mengambil data dari Google Sheet", "⚠️");
-        }
-      } finally {
-        if (btn) btn.classList.remove("opacity-50", "pointer-events-none");
-      }
-    }
-
     // =========================================================================
-    // 6. FORM INPUT TRANSAKSI (PENGELUARAN, PEMASUKAN, INVEST) & TANGGAL
+    // 7. INPUT FORM LOGIC (Sheet1 vs Invest)
     // =========================================================================
     function getSelectedType() {
       const checked = document.querySelector('input[name="tx-type"]:checked');
@@ -1634,7 +1854,7 @@ function doPost(e) {
 
         submitBtn.className =
           "w-full py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-indigo-600/25 transition flex items-center justify-center gap-2 cursor-pointer";
-        btnText.textContent = "Simpan Investasi";
+        btnText.textContent = "Simpan ke Sheet Invest";
       } else {
         investBox.classList.add("hidden");
         standardBox.classList.remove("hidden");
@@ -1663,13 +1883,11 @@ function doPost(e) {
     }
 
     function updateInvestPreview() {
-      const lotVal = parseFloat(String(document.getElementById("inv-lot").value || "0").replace(",", ".")) || 0;
+      const lotVal = cleanFloatAmount(document.getElementById("inv-lot").value);
       const priceVal = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
-      const estTotal = Math.round(lotVal * priceVal);
+      const totalModal = Math.round(lotVal * priceVal);
       const previewEl = document.getElementById("inv-total-preview");
-      if (previewEl) {
-        previewEl.textContent = formatRupiah(estTotal);
-      }
+      if (previewEl) previewEl.textContent = formatRupiah(totalModal);
     }
 
     function handleDateModeChange() {
@@ -1709,10 +1927,10 @@ function doPost(e) {
     function getAllAvailableCategories() {
       const type = getSelectedType();
       const base = type === "Pengeluaran" ? DEFAULT_EXPENSE_CATEGORIES : DEFAULT_INCOME_CATEGORIES;
-      const fromTx = transactions
+      const fromSheet1 = sheet1Transactions
         .filter(function (t) { return t.type === type && t.kategori; })
         .map(function (t) { return t.kategori.toUpperCase(); });
-      return Array.from(new Set(base.concat(customCategories, fromTx)));
+      return Array.from(new Set(base.concat(customCategories, fromSheet1)));
     }
 
     function refreshCategoryDropdown(selectedCat) {
@@ -1794,8 +2012,7 @@ function doPost(e) {
     }
 
     function addQuickNominal(amount) {
-      const current = getRawNominal();
-      const updated = current + amount;
+      const updated = getRawNominal() + amount;
       document.getElementById("tx-nominal").value = updated.toLocaleString("id-ID");
     }
 
@@ -1806,64 +2023,8 @@ function doPost(e) {
     async function handleTransactionSubmit(e) {
       e.preventDefault();
       const type = getSelectedType();
-      const tanggal = getSelectedTransactionDateISO();
-      const dateDDMMYYYY = formatISOToDDMMYYYY(tanggal);
-
-      let newEntry = null;
-
-      if (type === "Invest") {
-        const kodeInvest = (document.getElementById("inv-kode").value || "BBCA/IDR").trim().toUpperCase();
-        const lot = parseFloat(String(document.getElementById("inv-lot").value || "0").replace(",", ".")) || 0;
-        const avgPrice = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
-        const note = document.getElementById("inv-note").value.trim();
-
-        if (lot <= 0) {
-          showToast("Amount / Lot harus lebih dari 0", "⚠️");
-          return;
-        }
-        if (avgPrice <= 0) {
-          showToast("Price When Buy / Average Buy harus lebih dari 0", "⚠️");
-          return;
-        }
-
-        const totalModal = Math.round(lot * avgPrice);
-        const autoKet = kodeInvest + " (" + lot + " lot @ " + formatRupiah(avgPrice) + ")" + (note ? " - " + note : "");
-
-        newEntry = {
-          tanggal: tanggal,
-          date: dateDDMMYYYY,
-          type: "Invest",
-          nominal: totalModal,
-          keterangan: autoKet,
-          kategori: "INVEST",
-          user: currentUser,
-          kodeInvest: kodeInvest,
-          lot: lot,
-          avgPrice: avgPrice
-        };
-      } else {
-        const nominal = getRawNominal();
-        const keterangan = document.getElementById("tx-keterangan").value.trim();
-        const kategori = document.getElementById("tx-kategori").value;
-
-        if (nominal <= 0) {
-          showToast("Nominal harus lebih dari 0", "⚠️");
-          return;
-        }
-
-        newEntry = {
-          tanggal: tanggal,
-          date: dateDDMMYYYY, // Format ddmmyyyy untuk Kolom D Sheet
-          type: type,
-          nominal: nominal,
-          keterangan: keterangan,
-          kategori: kategori.trim().toUpperCase(),
-          user: currentUser,
-          kodeInvest: "",
-          lot: 0,
-          avgPrice: 0
-        };
-      }
+      const dateISO = getSelectedTransactionDateISO();
+      const timestampWIB = getNowWIBTimestamp();
 
       const btn = document.getElementById("btn-submit-tx");
       const btnText = document.getElementById("submit-btn-text");
@@ -1871,23 +2032,95 @@ function doPost(e) {
       btn.disabled = true;
       btnText.textContent = "Menyimpan...";
 
-      transactions.push(newEntry);
+      let payload = null;
+
+      if (type === "Invest") {
+        // Struktur 10 Kolom A:J untuk Sheet "Invest"
+        const saham = (document.getElementById("inv-kode").value || "BBCA/IDR").trim().toUpperCase();
+        const lot = cleanFloatAmount(document.getElementById("inv-lot").value);
+        const avgPrice = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
+        const note = document.getElementById("inv-note").value.trim();
+
+        if (lot <= 0) {
+          showToast("Amount / Lot harus lebih dari 0", "⚠️");
+          btn.disabled = false;
+          btnText.textContent = originalText;
+          return;
+        }
+        if (avgPrice <= 0) {
+          showToast("Price When Buy / Average Buy harus lebih dari 0", "⚠️");
+          btn.disabled = false;
+          btnText.textContent = originalText;
+          return;
+        }
+
+        const amount = Math.round(lot * avgPrice);
+
+        payload = {
+          targetSheet: "Invest",
+          date: dateISO,
+          type: "Invest",
+          amount: amount,
+          lot: lot,
+          avgPrice: avgPrice,
+          saham: saham,
+          keterangan: note,
+          kategori: "INVEST",
+          user: currentUser,
+          timestamp: timestampWIB
+        };
+
+        investTransactions.push(payload);
+      } else {
+        // Struktur 7 Kolom A:G untuk Sheet "Sheet1"
+        const amount = getRawNominal();
+        const keterangan = document.getElementById("tx-keterangan").value.trim();
+        const kategori = (document.getElementById("tx-kategori").value || "OTHER").trim().toUpperCase();
+
+        if (amount <= 0) {
+          showToast("Nominal harus lebih dari 0", "⚠️");
+          btn.disabled = false;
+          btnText.textContent = originalText;
+          return;
+        }
+
+        payload = {
+          targetSheet: "Sheet1",
+          date: dateISO,
+          type: type,
+          amount: amount,
+          keterangan: keterangan,
+          kategori: kategori,
+          user: currentUser,
+          timestamp: timestampWIB
+        };
+
+        sheet1Transactions.push(payload);
+      }
+
       saveLocalState();
 
+      // POST dengan Content-Type: text/plain;charset=utf-8 agar tidak kena CORS preflight OPTIONS
       const scriptUrl = getScriptUrl();
       if (scriptUrl) {
         try {
           await fetch(scriptUrl, {
             method: "POST",
+            redirect: "follow",
             headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify(newEntry)
+            body: JSON.stringify(payload)
           });
-          showToast("Tersimpan ke baris bawah Google Sheet!", "✅");
+          showToast(
+            type === "Invest"
+              ? 'Tersimpan ke baris bawah sheet "Invest"!'
+              : 'Tersimpan ke baris bawah "Sheet1"!',
+            "✅"
+          );
         } catch (err) {
-          showToast("Tersimpan lokal (cek koneksi Google Sheet)", "⚠️");
+          showToast("Tersimpan di cache lokal (periksa Apps Script URL)", "⚠️");
         }
       } else {
-        showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
+        showToast("Tersimpan lokal! Isi Apps Script URL di Pengaturan untuk auto-write Sheet", "ℹ️");
       }
 
       // Reset form kembali ke default (Pengeluaran + Today)
@@ -1906,17 +2139,14 @@ function doPost(e) {
       btn.disabled = false;
       btnText.textContent = originalText;
 
-      populateMonthFilter();
-      populateHistoryFilters();
-      renderRecentMiniList();
+      safeRenderAllUI();
     }
 
     // =========================================================================
-    // 7. NAVIGASI TAB & RENDER RIWAYAT
+    // 8. NAVIGASI TAB & RENDER RIWAYAT
     // =========================================================================
     function switchTab(tabName) {
-      const tabs = ["input", "dashboard", "history"];
-      tabs.forEach(function (t) {
+      ["input", "dashboard", "history"].forEach(function (t) {
         document.getElementById("tab-" + t).classList.add("hidden");
         const navBtn = document.getElementById("nav-" + t);
         navBtn.className =
@@ -1943,11 +2173,10 @@ function doPost(e) {
       return "Rp " + Math.round(Number(num) || 0).toLocaleString("id-ID");
     }
 
-    function createTransactionItemHTML(tx) {
+    function createSheet1ItemHTML(tx) {
       const isIncome = tx.type === "Pemasukan";
-      const isInvest = tx.type === "Invest";
-      const amountClass = isInvest ? "text-indigo-600" : isIncome ? "text-emerald-600" : "text-rose-600";
-      const sign = isInvest ? "" : isIncome ? "+" : "-";
+      const amountClass = isIncome ? "text-emerald-600" : "text-rose-600";
+      const sign = isIncome ? "+" : "-";
       const userBadge = tx.user
         ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ' +
           (tx.user === "Kevin"
@@ -1957,23 +2186,17 @@ function doPost(e) {
           escapeHTML(tx.user) +
           "</span>"
         : "";
-      const investBadge = isInvest && tx.kodeInvest
-        ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-600 text-white">' +
-          escapeHTML(tx.kodeInvest) +
-          "</span>"
-        : "";
 
       return (
         '<div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">' +
         '<div class="min-w-0 flex-1">' +
         '<div class="flex items-center flex-wrap gap-1.5 mb-1">' +
-        investBadge +
         '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">' +
         escapeHTML(tx.kategori || "OTHER") +
         "</span>" +
         userBadge +
         '<span class="text-[10px] text-slate-400">' +
-        escapeHTML(tx.tanggal || tx.date || "-") +
+        escapeHTML(tx.date || "-") +
         "</span>" +
         "</div>" +
         '<p class="text-xs font-bold text-slate-800 truncate">' +
@@ -1985,7 +2208,45 @@ function doPost(e) {
         amountClass +
         '">' +
         sign +
-        formatRupiah(tx.nominal) +
+        formatRupiah(tx.amount) +
+        "</p>" +
+        "</div>" +
+        "</div>"
+      );
+    }
+
+    function createInvestItemHTML(inv) {
+      const formattedLot = Number((Number(inv.lot) || 0).toFixed(6)).toLocaleString("id-ID");
+      const userBadge = inv.user
+        ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ' +
+          (inv.user === "Kevin"
+            ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+            : "bg-pink-50 text-pink-700 border-pink-100") +
+          '">' +
+          escapeHTML(inv.user) +
+          "</span>"
+        : "";
+
+      return (
+        '<div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">' +
+        '<div class="min-w-0 flex-1">' +
+        '<div class="flex items-center flex-wrap gap-1.5 mb-1">' +
+        '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-600 text-white">' +
+        escapeHTML(inv.saham || "INVEST") +
+        "</span>" +
+        userBadge +
+        '<span class="text-[10px] text-slate-400">' +
+        escapeHTML(inv.date || "-") +
+        "</span>" +
+        "</div>" +
+        '<p class="text-xs font-bold text-slate-800 truncate">' +
+        formattedLot + " lot @ " + formatRupiah(inv.avgPrice) +
+        (inv.keterangan ? " • " + escapeHTML(inv.keterangan) : "") +
+        "</p>" +
+        "</div>" +
+        '<div class="text-right shrink-0">' +
+        '<p class="text-xs font-extrabold text-indigo-600">' +
+        formatRupiah(inv.amount) +
         "</p>" +
         "</div>" +
         "</div>"
@@ -1994,13 +2255,28 @@ function doPost(e) {
 
     function renderRecentMiniList() {
       const container = document.getElementById("recent-mini-list");
-      const latest = transactions.slice().reverse().slice(0, 4);
-
+      if (!container) return;
+      const latest = sheet1Transactions.slice().reverse().slice(0, 4);
       if (latest.length === 0) {
-        container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>';
+        container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi di Sheet1.</p>';
         return;
       }
-      container.innerHTML = latest.map(createTransactionItemHTML).join("");
+      container.innerHTML = latest.map(createSheet1ItemHTML).join("");
+    }
+
+    function switchHistorySubTab(subTab) {
+      historySubTab = subTab;
+      const btn1 = document.getElementById("hist-subtab-sheet1");
+      const btn2 = document.getElementById("hist-subtab-invest");
+      if (subTab === "sheet1") {
+        btn1.className = "py-2 px-3 rounded-xl text-xs font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer";
+        btn2.className = "py-2 px-3 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer";
+      } else {
+        btn2.className = "py-2 px-3 rounded-xl text-xs font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer";
+        btn1.className = "py-2 px-3 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer";
+      }
+      populateHistoryFilters();
+      renderFullHistory();
     }
 
     function populateHistoryFilters() {
@@ -2014,12 +2290,15 @@ function doPost(e) {
       const months = new Set();
       const cats = new Set();
 
-      transactions.forEach(function (tx) {
-        if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
-          months.add(tx.tanggal.substring(0, 7));
+      const sourceList = historySubTab === "sheet1" ? sheet1Transactions : investTransactions;
+      sourceList.forEach(function (item) {
+        if (item.date && /^\d{4}-(0[1-9]|1[0-2])/.test(item.date)) {
+          months.add(item.date.substring(0, 7));
         }
-        if (tx.kategori) {
-          cats.add(tx.kategori.toUpperCase());
+        if (historySubTab === "sheet1" && item.kategori) {
+          cats.add(item.kategori.toUpperCase());
+        } else if (historySubTab === "invest" && item.saham) {
+          cats.add(item.saham.toUpperCase());
         }
       });
 
@@ -2036,7 +2315,10 @@ function doPost(e) {
       }
 
       const sortedCats = Array.from(cats).sort();
-      catSelect.innerHTML = '<option value="ALL">Semua Kategori</option>';
+      catSelect.innerHTML =
+        historySubTab === "sheet1"
+          ? '<option value="ALL">Semua Kategori</option>'
+          : '<option value="ALL">Semua Saham</option>';
       sortedCats.forEach(function (c) {
         const opt = document.createElement("option");
         opt.value = c;
@@ -2062,87 +2344,74 @@ function doPost(e) {
 
     function renderFullHistory() {
       const container = document.getElementById("full-history-list");
-      const searchEl = document.getElementById("hist-search-input");
-      const monthEl = document.getElementById("hist-month-filter");
-      const typeEl = document.getElementById("hist-type-filter");
-      const catEl = document.getElementById("hist-cat-filter");
+      const searchVal = (document.getElementById("hist-search-input").value || "").trim().toLowerCase();
+      const monthVal = document.getElementById("hist-month-filter").value;
+      const catVal = document.getElementById("hist-cat-filter").value;
 
-      const searchVal = (searchEl ? searchEl.value : "").trim().toLowerCase();
-      const monthVal = monthEl ? monthEl.value : "ALL";
-      const typeVal = typeEl ? typeEl.value : "ALL";
-      const catVal = catEl ? catEl.value : "ALL";
-
-      let list = transactions.slice().reverse();
-
-      if (historyUserFilter !== "ALL") {
-        list = list.filter(function (t) { return t.user === historyUserFilter; });
-      }
-      if (monthVal !== "ALL") {
-        list = list.filter(function (t) { return t.tanggal && t.tanggal.startsWith(monthVal); });
-      }
-      if (typeVal !== "ALL") {
-        list = list.filter(function (t) { return t.type === typeVal; });
-      }
-      if (catVal !== "ALL") {
-        list = list.filter(function (t) { return (t.kategori || "").toUpperCase() === catVal; });
-      }
-      if (searchVal) {
-        list = list.filter(function (t) {
-          return (
-            (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1 ||
-            (t.kategori || "").toLowerCase().indexOf(searchVal) !== -1
-          );
-        });
-      }
-
-      document.getElementById("history-count-label").textContent = list.length + " transaksi ditampilkan";
-
-      if (list.length === 0) {
+      if (historySubTab === "sheet1") {
+        let list = sheet1Transactions.slice().reverse();
+        if (historyUserFilter !== "ALL") list = list.filter(function (t) { return t.user === historyUserFilter; });
+        if (monthVal !== "ALL") list = list.filter(function (t) { return t.date && t.date.startsWith(monthVal); });
+        if (catVal !== "ALL") list = list.filter(function (t) { return (t.kategori || "").toUpperCase() === catVal; });
+        if (searchVal) {
+          list = list.filter(function (t) {
+            return (
+              (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1 ||
+              (t.kategori || "").toLowerCase().indexOf(searchVal) !== -1
+            );
+          });
+        }
+        document.getElementById("history-count-label").textContent = list.length + " transaksi (Sheet1)";
         container.innerHTML =
-          '<div class="bg-white rounded-3xl p-8 text-center border border-slate-100">' +
-          '<p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p>' +
-          '<p class="text-xs text-slate-400 mt-1">Coba ubah filter atau kata kunci pencarian.</p>' +
-          "</div>";
-        return;
+          list.length === 0
+            ? '<div class="bg-white rounded-3xl p-8 text-center border border-slate-100"><p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p></div>'
+            : list.map(createSheet1ItemHTML).join("");
+      } else {
+        let list = investTransactions.slice().reverse();
+        if (historyUserFilter !== "ALL") list = list.filter(function (t) { return t.user === historyUserFilter; });
+        if (monthVal !== "ALL") list = list.filter(function (t) { return t.date && t.date.startsWith(monthVal); });
+        if (catVal !== "ALL") list = list.filter(function (t) { return (t.saham || "").toUpperCase() === catVal; });
+        if (searchVal) {
+          list = list.filter(function (t) {
+            return (
+              (t.saham || "").toLowerCase().indexOf(searchVal) !== -1 ||
+              (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1
+            );
+          });
+        }
+        document.getElementById("history-count-label").textContent = list.length + " catatan investasi (Invest)";
+        container.innerHTML =
+          list.length === 0
+            ? '<div class="bg-white rounded-3xl p-8 text-center border border-slate-100"><p class="text-sm font-bold text-slate-600">Tidak ada data investasi ditemukan</p></div>'
+            : list.map(createInvestItemHTML).join("");
       }
-
-      container.innerHTML = list.map(createTransactionItemHTML).join("");
     }
 
     // =========================================================================
-    // 8. DASHBOARD PAGINATION, ANALYTICS & INVESTMENT TRACKER
+    // 9. DASHBOARD PAGINATION & 3 SEPARATE REPORTS
     // =========================================================================
     function switchDashboardPage(pageNum) {
       currentDashboardPage = pageNum;
-      const pageTitles = {
-        1: "Halaman 1 dari 3 • Bulanan Pengeluaran vs Pemasukan",
-        2: "Halaman 2 dari 3 • Pengeluaran & Pemasukan per Kategori",
+      const titles = {
+        1: "Halaman 1 dari 3 • Bulanan (Pengeluaran vs Pemasukan)",
+        2: "Halaman 2 dari 3 • Berdasarkan Kategori",
         3: "Halaman 3 dari 3 • Value Investment Today"
       };
+      document.getElementById("dash-subtitle").textContent = titles[pageNum] || "";
+      document.getElementById("dash-pagination-indicator").textContent = "Halaman " + pageNum + " / 3";
 
-      const subtitleEl = document.getElementById("dash-subtitle");
-      if (subtitleEl) subtitleEl.textContent = pageTitles[pageNum] || "";
-
-      const indicatorEl = document.getElementById("dash-pagination-indicator");
-      if (indicatorEl) indicatorEl.textContent = "Halaman " + pageNum + " / 3";
-
-      const prevBtn = document.getElementById("btn-dash-prev");
-      const nextBtn = document.getElementById("btn-dash-next");
-      if (prevBtn) prevBtn.disabled = pageNum <= 1;
-      if (nextBtn) nextBtn.disabled = pageNum >= 3;
+      document.getElementById("btn-dash-prev").disabled = pageNum <= 1;
+      document.getElementById("btn-dash-next").disabled = pageNum >= 3;
 
       [1, 2, 3].forEach(function (p) {
         const pageEl = document.getElementById("dash-page-" + p);
         const tabBtn = document.getElementById("dash-tab-btn-" + p);
-        if (pageEl) {
-          if (p === pageNum) pageEl.classList.remove("hidden");
-          else pageEl.classList.add("hidden");
-        }
-        if (tabBtn) {
-          tabBtn.className =
-            p === pageNum
-              ? "py-2 px-2 rounded-xl text-[11px] font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer"
-              : "py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer";
+        if (p === pageNum) {
+          pageEl.classList.remove("hidden");
+          tabBtn.className = "py-2 px-2 rounded-xl text-[11px] font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer";
+        } else {
+          pageEl.classList.add("hidden");
+          tabBtn.className = "py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer";
         }
       });
 
@@ -2157,15 +2426,11 @@ function doPost(e) {
     }
 
     function prevDashboardPage() {
-      if (currentDashboardPage > 1) {
-        switchDashboardPage(currentDashboardPage - 1);
-      }
+      if (currentDashboardPage > 1) switchDashboardPage(currentDashboardPage - 1);
     }
 
     function nextDashboardPage() {
-      if (currentDashboardPage < 3) {
-        switchDashboardPage(currentDashboardPage + 1);
-      }
+      if (currentDashboardPage < 3) switchDashboardPage(currentDashboardPage + 1);
     }
 
     function syncMonthFilters(val) {
@@ -2182,9 +2447,9 @@ function doPost(e) {
       const currentVal = select1.value;
       const months = new Set();
 
-      transactions.forEach(function (tx) {
-        if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
-          months.add(tx.tanggal.substring(0, 7)); // YYYY-MM
+      sheet1Transactions.forEach(function (tx) {
+        if (tx.date && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.date)) {
+          months.add(tx.date.substring(0, 7));
         }
       });
 
@@ -2207,24 +2472,18 @@ function doPost(e) {
     function formatYearMonthLabel(ym) {
       if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
       const parts = ym.split("-");
-      const y = parts[0];
-      const m = parts[1];
       const monthNames = [
         "Januari", "Februari", "Maret", "April", "Mei", "Juni",
         "Juli", "Agustus", "September", "Oktober", "November", "Desember"
       ];
-      const idx = parseInt(m, 10) - 1;
-      return monthNames[idx] + " " + y;
+      return monthNames[parseInt(parts[1], 10) - 1] + " " + parts[0];
     }
 
     function formatShortMonthLabel(ym) {
       if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
       const parts = ym.split("-");
-      const y = parts[0];
-      const m = parts[1];
       const shortNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-      const idx = parseInt(m, 10) - 1;
-      return shortNames[idx] + " '" + y.slice(2);
+      return shortNames[parseInt(parts[1], 10) - 1] + " '" + parts[0].slice(2);
     }
 
     function setCategoryReportType(type) {
@@ -2246,15 +2505,15 @@ function doPost(e) {
       const selectedMonth = document.getElementById("dash-month-filter").value;
       const filteredTx =
         selectedMonth === "ALL"
-          ? transactions
-          : transactions.filter(function (t) { return t.tanggal && t.tanggal.startsWith(selectedMonth); });
+          ? sheet1Transactions
+          : sheet1Transactions.filter(function (t) { return t.date && t.date.startsWith(selectedMonth); });
 
       let totalIncome = 0;
       let totalExpense = 0;
 
       filteredTx.forEach(function (tx) {
-        if (tx.type === "Pemasukan") totalIncome += Number(tx.nominal) || 0;
-        else if (tx.type === "Pengeluaran") totalExpense += Number(tx.nominal) || 0;
+        if (tx.type === "Pemasukan") totalIncome += Number(tx.amount) || 0;
+        else totalExpense += Number(tx.amount) || 0;
       });
 
       const balance = totalIncome - totalExpense;
@@ -2279,19 +2538,16 @@ function doPost(e) {
       renderCategoryReport();
     }
 
-    // REPORT 1: Bulanan Pengeluaran vs Pemasukan
+    // HALAMAN 1: Bulanan Pengeluaran vs Pemasukan
     function renderMonthlyReport() {
       const monthlyMap = {};
 
-      transactions.forEach(function (tx) {
-        if (tx.type === "Invest") return; // Investasi dilaporkan khusus di Report 3
-        if (!tx.tanggal || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) return;
-        const ym = tx.tanggal.substring(0, 7);
-        if (!monthlyMap[ym]) {
-          monthlyMap[ym] = { income: 0, expense: 0 };
-        }
-        if (tx.type === "Pemasukan") monthlyMap[ym].income += Number(tx.nominal) || 0;
-        else if (tx.type === "Pengeluaran") monthlyMap[ym].expense += Number(tx.nominal) || 0;
+      sheet1Transactions.forEach(function (tx) {
+        if (!tx.date || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.date)) return;
+        const ym = tx.date.substring(0, 7);
+        if (!monthlyMap[ym]) monthlyMap[ym] = { income: 0, expense: 0 };
+        if (tx.type === "Pemasukan") monthlyMap[ym].income += Number(tx.amount) || 0;
+        else monthlyMap[ym].expense += Number(tx.amount) || 0;
       });
 
       const sortedMonths = Object.keys(monthlyMap).sort();
@@ -2344,9 +2600,7 @@ function doPost(e) {
                   }
                 }
               },
-              x: {
-                ticks: { font: { size: 10, weight: "bold" } }
-              }
+              x: { ticks: { font: { size: 10, weight: "bold" } } }
             }
           }
         });
@@ -2382,12 +2636,12 @@ function doPost(e) {
         .join("");
     }
 
-    // REPORT 2: Berdasarkan Kategori
+    // HALAMAN 2: Berdasarkan Kategori
     function renderCategoryReport() {
       const selectedMonth = document.getElementById("dash-month-filter").value;
-      const filteredTx = transactions.filter(function (t) {
+      const filteredTx = sheet1Transactions.filter(function (t) {
         const matchType = t.type === categoryReportType;
-        const matchMonth = selectedMonth === "ALL" || (t.tanggal && t.tanggal.startsWith(selectedMonth));
+        const matchMonth = selectedMonth === "ALL" || (t.date && t.date.startsWith(selectedMonth));
         return matchType && matchMonth;
       });
 
@@ -2397,9 +2651,9 @@ function doPost(e) {
       filteredTx.forEach(function (tx) {
         const cat = (tx.kategori || "OTHER").toUpperCase();
         if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
-        catMap[cat].total += Number(tx.nominal) || 0;
+        catMap[cat].total += Number(tx.amount) || 0;
         catMap[cat].count += 1;
-        grandTotal += Number(tx.nominal) || 0;
+        grandTotal += Number(tx.amount) || 0;
       });
 
       const sortedCats = Object.entries(catMap).sort(function (a, b) {
@@ -2480,7 +2734,9 @@ function doPost(e) {
         .join("");
     }
 
-    // REPORT 3: Value Investment Today (BBCA/IDR & BTC/IDR)
+    // =========================================================================
+    // 10. HALAMAN 3: VALUE INVESTMENT TODAY (BBCA/IDR & BTC/IDR)
+    // =========================================================================
     async function refreshInvestmentPrices(showToastFlag) {
       const btn = document.getElementById("btn-refresh-price");
       if (btn) {
@@ -2490,11 +2746,11 @@ function doPost(e) {
 
       let updatedAny = false;
 
-      // 1. Jika URL Apps Script terpasang, coba sinkronisasi harga GOOGLEFINANCE dari Sheet terlebih dahulu
+      // 1. Jika Apps Script URL tersedia, ambil GOOGLEFINANCE("IDX:BBCA","price") & GOOGLEFINANCE("CURRENCY:BTCIDR")
       const scriptUrl = getScriptUrl();
       if (scriptUrl && showToastFlag) {
         try {
-          const res = await fetch(scriptUrl);
+          const res = await fetch(scriptUrl, { method: "GET", redirect: "follow" });
           const json = await res.json();
           if (json && json.prices) {
             if (Number(json.prices["BBCA/IDR"]) > 0) {
@@ -2509,7 +2765,7 @@ function doPost(e) {
         } catch (e) {}
       }
 
-      // 2. Fallback / Direct Live Fetch untuk BTC/IDR (Coinbase & CoinGecko)
+      // 2. Live API Publik BTC/IDR (Coinbase & CoinGecko)
       try {
         const btcRes = await fetch("https://api.coinbase.com/v2/prices/BTC-IDR/spot");
         const btcJson = await btcRes.json();
@@ -2530,41 +2786,66 @@ function doPost(e) {
         } catch (err2) {}
       }
 
-      // 3. Fallback / Direct Live Fetch untuk BBCA/IDR (IDX:BBCA via Yahoo Finance proxy)
-      if (!liveMarketPrices["BBCA/IDR"] || showToastFlag) {
-        try {
-          const yahooUrl = encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=1d");
-          const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
-          const bbcaWrapper = await bbcaRes.json();
-          if (bbcaWrapper && bbcaWrapper.contents) {
-            const parsedYahoo = JSON.parse(bbcaWrapper.contents);
-            const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
-            const marketPrice = Number(meta && meta.regularMarketPrice);
-            if (marketPrice > 0) {
-              liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
-              updatedAny = true;
-            }
+      // 3. Live API Publik BBCA/IDR (IDX:BBCA via Yahoo Finance JSON proxy)
+      try {
+        const yahooUrl = encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=1d");
+        const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
+        const bbcaWrapper = await bbcaRes.json();
+        if (bbcaWrapper && bbcaWrapper.contents) {
+          const parsedYahoo = JSON.parse(bbcaWrapper.contents);
+          const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
+          const marketPrice = Number(meta && meta.regularMarketPrice);
+          if (marketPrice > 0) {
+            liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
+            updatedAny = true;
           }
-        } catch (e) {}
-      }
+        }
+      } catch (e) {}
 
       const timeNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
       if (updatedAny) {
         priceSourceLabel = "Google Finance & Market API • Update " + timeNow;
         saveLocalState();
-        if (showToastFlag) {
-          showToast("Harga BBCA/IDR & BTC/IDR berhasil diperbarui!", "📈");
-        }
+        if (showToastFlag) showToast("Harga BBCA/IDR & BTC/IDR diperbarui!", "📈");
       } else if (showToastFlag) {
-        showToast("Menggunakan harga terakhir tersimpan", "ℹ️");
+        showToast("Menggunakan harga terakhir tersimpan / manual", "ℹ️");
       }
 
       if (btn) {
         btn.disabled = false;
-        btn.textContent = "↻ Harga Google";
+        btn.textContent = "↻ Refresh Harga";
       }
 
       renderInvestmentReport();
+    }
+
+    function openManualPriceEditor(assetCode) {
+      editingManualAssetCode = assetCode;
+      document.getElementById("manual-price-code").textContent = assetCode;
+      const currentPrice = Number(liveMarketPrices[assetCode]) || 0;
+      document.getElementById("manual-price-input").value = currentPrice > 0 ? currentPrice.toLocaleString("id-ID") : "";
+      document.getElementById("manual-price-modal").classList.remove("hidden");
+      document.getElementById("manual-price-input").focus();
+    }
+
+    function closeManualPriceEditor() {
+      editingManualAssetCode = null;
+      document.getElementById("manual-price-modal").classList.add("hidden");
+    }
+
+    function saveManualPrice() {
+      if (!editingManualAssetCode) return;
+      const val = Number(String(document.getElementById("manual-price-input").value || "").replace(/\D/g, "")) || 0;
+      if (val <= 0) {
+        showToast("Masukkan harga yang valid (> 0)", "⚠️");
+        return;
+      }
+      liveMarketPrices[editingManualAssetCode] = val;
+      priceSourceLabel = "Harga Manual • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+      saveLocalState();
+      closeManualPriceEditor();
+      renderInvestmentReport();
+      showToast("Harga " + editingManualAssetCode + " diperbarui!", "✅");
     }
 
     function renderInvestmentReport() {
@@ -2576,8 +2857,6 @@ function doPost(e) {
         { code: "BTC/IDR", name: "Bitcoin Rupiah (BTC/IDR)", badge: "CRYPTO", badgeClass: "bg-amber-100 text-amber-700" }
       ];
 
-      const investTxs = transactions.filter(function (t) { return t.type === "Invest"; });
-
       let grandModal = 0;
       let grandCurrent = 0;
 
@@ -2585,45 +2864,47 @@ function doPost(e) {
       if (assetsContainer) {
         assetsContainer.innerHTML = supportedAssets
           .map(function (asset) {
-            const assetTxs = investTxs.filter(function (t) {
-              return (t.kodeInvest || "").toUpperCase() === asset.code;
+            const assetTxs = investTransactions.filter(function (t) {
+              return (t.saham || "").toUpperCase() === asset.code;
             });
 
             let totalLot = 0;
-            let totalModal = 0;
+            let totalAmountModal = 0;
 
             assetTxs.forEach(function (t) {
               const lot = Number(t.lot) || 0;
               const avg = Number(t.avgPrice) || 0;
-              const modalTx = lot > 0 && avg > 0 ? lot * avg : Number(t.nominal) || 0;
+              const modalTx = Number(t.amount) > 0 ? Number(t.amount) : lot * avg;
               totalLot += lot;
-              totalModal += modalTx;
+              totalAmountModal += modalTx;
             });
 
-            const avgPrice = totalLot > 0 ? totalModal / totalLot : 0;
+            // Weighted Average Price = total Amount / total Lot lembar
+            const avgPrice = totalLot > 0 ? totalAmountModal / totalLot : 0;
+            const totalModalCalc = avgPrice * totalLot;
             const priceToday = Number(liveMarketPrices[asset.code]) || 0;
-            const currentVal = priceToday > 0 ? priceToday * totalLot : totalModal;
+            const currentVal = priceToday > 0 ? priceToday * totalLot : totalModalCalc;
 
-            // Return = (Price Today x Lot Dimiliki) - (Average Price x Lot Dimiliki)
+            // Return = (Price Today × Total Lot Dimiliki) - (Average Price × Total Lot Dimiliki)
             const returnVal = totalLot > 0 && priceToday > 0
               ? (priceToday * totalLot) - (avgPrice * totalLot)
               : 0;
-            const returnPct = totalModal > 0 && priceToday > 0
-              ? ((returnVal / totalModal) * 100).toFixed(2)
+            const returnPct = totalModalCalc > 0 && priceToday > 0
+              ? ((returnVal / totalModalCalc) * 100).toFixed(2)
               : "0.00";
 
-            grandModal += totalModal;
+            grandModal += totalModalCalc;
             grandCurrent += currentVal;
 
             const isMinus = returnVal < 0;
             const isPlus = returnVal > 0;
-            const returnColorClass = isMinus
-              ? "text-rose-600"
+            const returnColorStyle = isMinus
+              ? "color: #EF4444;"
               : isPlus
-                ? "text-emerald-600"
-                : "text-slate-700";
+                ? "color: #10B981;"
+                : "";
             const returnBadgeClass = isMinus
-              ? "bg-rose-50 text-rose-600 border-rose-200"
+              ? "bg-red-50 text-red-600 border-red-200"
               : isPlus
                 ? "bg-emerald-50 text-emerald-600 border-emerald-200"
                 : "bg-slate-100 text-slate-600 border-slate-200";
@@ -2656,11 +2937,14 @@ function doPost(e) {
               '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(avgPrice) + '</p>' +
               '</div>' +
               '<div>' +
-              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Price Today (Google)</p>' +
+              '<div class="flex items-center justify-between">' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Price Today</p>' +
+              '<button type="button" onclick="openManualPriceEditor(\'' + asset.code + '\')" class="text-[10px] font-bold text-indigo-600 hover:underline cursor-pointer">Edit</button>' +
+              '</div>' +
               '<p class="text-sm font-extrabold text-indigo-600 mt-0.5">' + (priceToday > 0 ? formatRupiah(priceToday) : 'Belum tersedia') + '</p>' +
               '</div>' +
               '<div>' +
-              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Value Saat Ini</p>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Nilai Hari Ini</p>' +
               '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(currentVal) + '</p>' +
               '</div>' +
               '</div>' +
@@ -2668,9 +2952,9 @@ function doPost(e) {
               '<div class="flex items-center justify-between pt-1">' +
               '<div>' +
               '<p class="text-[10px] font-bold text-slate-400 uppercase">Return (Profit / Loss)</p>' +
-              '<p class="text-[10px] text-slate-400">Modal: ' + formatRupiah(totalModal) + '</p>' +
+              '<p class="text-[10px] text-slate-400">Total Modal: ' + formatRupiah(totalModalCalc) + '</p>' +
               '</div>' +
-              '<p class="text-base font-extrabold ' + returnColorClass + '">' +
+              '<p class="text-base font-extrabold text-slate-700" style="' + returnColorStyle + '">' +
               returnSign + formatRupiah(Math.abs(returnVal)) +
               '</p>' +
               '</div>' +
@@ -2680,41 +2964,31 @@ function doPost(e) {
           .join("");
       }
 
-      // Update Summary Portfolio di Kartu Atas Page 3
+      // Summary Portfolio Header
       const grandReturn = grandCurrent - grandModal;
-      const sumCurrentEl = document.getElementById("inv-summary-current");
-      const sumModalEl = document.getElementById("inv-summary-modal");
+      document.getElementById("inv-summary-current").textContent = formatRupiah(grandCurrent);
+      document.getElementById("inv-summary-modal").textContent = formatRupiah(grandModal);
+
       const sumReturnEl = document.getElementById("inv-summary-return");
+      const isMinus = grandReturn < 0;
+      const isPlus = grandReturn > 0;
+      const sign = isMinus ? "-" : isPlus ? "+" : "";
+      sumReturnEl.textContent = sign + formatRupiah(Math.abs(grandReturn));
+      sumReturnEl.style.color = isMinus ? "#EF4444" : isPlus ? "#10B981" : "#e2e8f0";
 
-      if (sumCurrentEl) sumCurrentEl.textContent = formatRupiah(grandCurrent);
-      if (sumModalEl) sumModalEl.textContent = formatRupiah(grandModal);
-      if (sumReturnEl) {
-        const isMinus = grandReturn < 0;
-        const isPlus = grandReturn > 0;
-        const sign = isMinus ? "-" : isPlus ? "+" : "";
-        sumReturnEl.textContent = sign + formatRupiah(Math.abs(grandReturn));
-        sumReturnEl.className = isMinus
-          ? "text-sm font-extrabold text-rose-400"
-          : isPlus
-            ? "text-sm font-extrabold text-emerald-400"
-            : "text-sm font-extrabold text-slate-200";
-      }
-
-      // Render Riwayat Pembelian Investasi
+      // List Riwayat Sheet Invest
       const invHistEl = document.getElementById("investment-history-list");
       if (invHistEl) {
-        const sortedInv = investTxs.slice().reverse();
-        if (sortedInv.length === 0) {
-          invHistEl.innerHTML =
-            '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi investasi. Pilih Type "Invest" di tab Input.</p>';
-        } else {
-          invHistEl.innerHTML = sortedInv.map(createTransactionItemHTML).join("");
-        }
+        const sortedInv = investTransactions.slice().reverse();
+        invHistEl.innerHTML =
+          sortedInv.length === 0
+            ? '<p class="text-xs text-slate-400 text-center py-4">Belum ada catatan investasi di sheet "Invest".</p>'
+            : sortedInv.map(createInvestItemHTML).join("");
       }
     }
 
     // =========================================================================
-    // 9. UTILITIES
+    // 11. UTILITIES
     // =========================================================================
     function showToast(message, icon) {
       if (!icon) icon = "✅";
