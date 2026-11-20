@@ -63,21 +63,51 @@
 </head>
 <body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
-  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Aman dari SyntaxError JS) -->
+  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Kolom A-I + GOOGLEFINANCE BBCA/IDR & BTC/IDR) -->
   <textarea id="appsScriptTemplate" style="display:none;">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
+const HEADERS = ['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User', 'Kode_Invest', 'Lot', 'Avg_Price'];
 
 function getTargetSheet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = ss.getSheets()[0];
+  const sheet = ss.getSheets()[0]; // Sheet1
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User']);
+    sheet.appendRow(HEADERS);
+  } else {
+    // Pastikan header kolom G-I terisi jika sheet sudah ada data historis A-F
+    const headerRange = sheet.getRange(1, 1, 1, 9);
+    const currentHeaders = headerRange.getValues()[0];
+    if (!currentHeaders[6]) {
+      sheet.getRange(1, 7, 1, 3).setValues([['Kode_Invest', 'Lot', 'Avg_Price']]);
+    }
   }
   return sheet;
 }
 
+function getGoogleFinancePrices(ss) {
+  let priceSheet = ss.getSheetByName('_MarketPrices');
+  if (!priceSheet) {
+    priceSheet = ss.insertSheet('_MarketPrices');
+    priceSheet.getRange('A1:B2').setValues([
+      ['BBCA/IDR', '=GOOGLEFINANCE("IDX:BBCA", "price")'],
+      ['BTC/IDR', '=GOOGLEFINANCE("CURRENCY:BTCIDR")']
+    ]);
+    SpreadsheetApp.flush();
+  }
+  const vals = priceSheet.getRange('A1:B2').getValues();
+  const prices = {};
+  for (let i = 0; i < vals.length; i++) {
+    const code = String(vals[i][0] || '').trim();
+    const num = Number(vals[i][1]);
+    if (code && !isNaN(num) && num > 0) {
+      prices[code] = num;
+    }
+  }
+  return prices;
+}
+
 function doGet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
   const sheet = getTargetSheet();
-  // getDisplayValues() menjaga leading zero pada format 8 digit '01122025'
   const rows = sheet.getDataRange().getDisplayValues();
   const result = [];
 
@@ -85,15 +115,21 @@ function doGet() {
     const r = rows[i];
     if (!r[0] && !r[1] && !r[3]) continue;
 
-    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User
+    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User, G=Kode_Invest, H=Lot, I=Avg_Price
     const rawNominal = String(r[0] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
     const nominal = Number(rawNominal) || 0;
     const keterangan = String(r[1] || '').trim();
     const kategori = String(r[2] || 'OTHER').trim().toUpperCase() || 'OTHER';
     const dateRaw = String(r[3] || '').trim();
-    const typeRaw = String(r[4] || '').trim();
-    const type = typeRaw.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+    const typeRaw = String(r[4] || '').trim().toLowerCase();
+    let type = 'Pengeluaran';
+    if (typeRaw === 'pemasukan') type = 'Pemasukan';
+    else if (typeRaw === 'invest') type = 'Invest';
+
     const user = String(r[5] || '').trim();
+    const kodeInvest = String(r[6] || '').trim().toUpperCase();
+    const lot = parseFloat(String(r[7] || '0').replace(',', '.')) || 0;
+    const avgPrice = Number(String(r[8] || '0').replace(/[.,]00$/, '').replace(/[^\d.-]/g, '')) || 0;
 
     result.push({
       nominal: nominal,
@@ -101,12 +137,22 @@ function doGet() {
       kategori: kategori,
       date: dateRaw,
       type: type,
-      user: user
+      user: user,
+      kodeInvest: kodeInvest,
+      lot: lot,
+      avgPrice: avgPrice
     });
   }
 
+  let prices = {};
+  try {
+    prices = getGoogleFinancePrices(ss);
+  } catch (err) {
+    prices = {};
+  }
+
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'success', data: result }))
+    .createTextOutput(JSON.stringify({ status: 'success', data: result, prices: prices }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -118,11 +164,18 @@ function doPost(e) {
   const keterangan = String(p.keterangan || '').trim();
   const kategori = String(p.kategori || 'OTHER').trim().toUpperCase();
   const dateStr = String(p.date || '').trim(); // Format ddmmyyyy (contoh: 20112026)
-  const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
-  const user = String(p.user || '').trim();
 
-  // Simpan ke baris paling bawah: [A: Nominal, B: Keterangan, C: Kategori, D: Date(ddmmyyyy), E: Type, F: User]
-  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user]);
+  let type = 'Pengeluaran';
+  if (p.type === 'Pemasukan') type = 'Pemasukan';
+  else if (p.type === 'Invest') type = 'Invest';
+
+  const user = String(p.user || '').trim();
+  const kodeInvest = type === 'Invest' ? String(p.kodeInvest || '').trim().toUpperCase() : '';
+  const lot = type === 'Invest' ? (Number(p.lot) || 0) : '';
+  const avgPrice = type === 'Invest' ? (Number(p.avgPrice) || 0) : '';
+
+  // Simpan ke baris paling bawah Sheet1: [A..I]
+  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user, kodeInvest, lot, avgPrice]);
 
   return ContentService
     .createTextOutput(JSON.stringify({ status: 'success' }))
@@ -301,125 +354,244 @@ function doPost(e) {
 
         <form id="transaction-form" onsubmit="handleTransactionSubmit(event)" class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-5">
 
-          <!-- 1. TYPE (Radio Button Pill Selector: Default Pengeluaran) -->
+          <!-- 1. TYPE (3 Radio Button Options: Pengeluaran [default], Pemasukan, Invest) -->
           <div>
             <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
               1. Type Transaksi
             </label>
-            <div class="grid grid-cols-2 gap-2.5 p-1.5 bg-slate-100 rounded-2xl">
+            <div class="grid grid-cols-3 gap-2 p-1.5 bg-slate-100 rounded-2xl">
               <label class="cursor-pointer">
                 <input type="radio" name="tx-type" value="Pengeluaran" checked class="peer sr-only" onchange="handleTypeChange()" />
-                <div class="py-2.5 px-3 rounded-xl text-center text-sm font-bold text-slate-500 peer-checked:bg-rose-500 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1.5">
-                  <span>💸</span> Pengeluaran
+                <div class="py-2.5 px-2 rounded-xl text-center text-xs font-bold text-slate-500 peer-checked:bg-rose-500 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1">
+                  <span>💸</span> Keluar
                 </div>
               </label>
 
               <label class="cursor-pointer">
                 <input type="radio" name="tx-type" value="Pemasukan" class="peer sr-only" onchange="handleTypeChange()" />
-                <div class="py-2.5 px-3 rounded-xl text-center text-sm font-bold text-slate-500 peer-checked:bg-emerald-600 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1.5">
-                  <span>💰</span> Pemasukan
+                <div class="py-2.5 px-2 rounded-xl text-center text-xs font-bold text-slate-500 peer-checked:bg-emerald-600 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1">
+                  <span>💰</span> Masuk
+                </div>
+              </label>
+
+              <label class="cursor-pointer">
+                <input type="radio" name="tx-type" value="Invest" class="peer sr-only" onchange="handleTypeChange()" />
+                <div class="py-2.5 px-2 rounded-xl text-center text-xs font-bold text-slate-500 peer-checked:bg-indigo-600 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1">
+                  <span>📈</span> Invest
                 </div>
               </label>
             </div>
           </div>
 
-          <!-- NOMINAL (Rp) -->
-          <div>
-            <label for="tx-nominal" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-              Nominal (Rp)
-            </label>
-            <div class="relative">
-              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-base font-extrabold text-slate-400">Rp</span>
-              <input
-                type="text"
-                inputmode="numeric"
-                id="tx-nominal"
-                placeholder="0"
-                required
-                oninput="formatNominalInput(this)"
-                class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xl font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
-              />
-            </div>
-            <!-- Tombol Cepat Nominal (+10rb, +50rb, +100rb) -->
-            <div class="flex gap-2 mt-2 overflow-x-auto no-scrollbar">
-              <button type="button" onclick="addQuickNominal(10000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+10rb</button>
-              <button type="button" onclick="addQuickNominal(50000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+50rb</button>
-              <button type="button" onclick="addQuickNominal(100000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+100rb</button>
-              <button type="button" onclick="clearNominal()" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-xs font-bold text-rose-600 shrink-0 ml-auto cursor-pointer">Reset</button>
-            </div>
-          </div>
-
-          <!-- 2. KETERANGAN (Free Text) -->
-          <div>
-            <label for="tx-keterangan" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-              2. Keterangan
-            </label>
-            <input
-              type="text"
-              id="tx-keterangan"
-              placeholder="Contoh: Bakmie, Shopee, Listrik..."
-              required
-              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
-            />
-          </div>
-
-          <!-- 3. KATEGORI (Pilih List atau Tambah Baru) -->
-          <div>
-            <div class="flex items-center justify-between mb-1.5">
-              <label for="tx-kategori" class="block text-xs font-bold text-slate-500 uppercase tracking-wider">
-                3. Kategori
+          <!-- ==================== FIELDS STANDAR (PENGELUARAN / PEMASUKAN) ==================== -->
+          <div id="standard-fields" class="space-y-5">
+            <!-- NOMINAL (Rp) -->
+            <div>
+              <label for="tx-nominal" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                Nominal (Rp)
               </label>
-              <button
-                type="button"
-                id="btn-toggle-new-cat"
-                onclick="toggleNewCategoryBox()"
-                class="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer"
-              >
-                <span>+ Tambah Kategori Baru</span>
-              </button>
-            </div>
-
-            <select
-              id="tx-kategori"
-              onchange="refreshCategoryDropdown(this.value)"
-              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
-            ></select>
-
-            <!-- Quick category chips -->
-            <div id="category-chips" class="flex flex-wrap gap-1.5 mt-2.5"></div>
-
-            <!-- Add New Category Inline Box -->
-            <div id="new-category-box" class="hidden mt-3 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
-              <label for="new-category-input" class="block text-[11px] font-bold text-indigo-900">Nama Kategori Baru</label>
-              <div class="flex gap-2">
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-base font-extrabold text-slate-400">Rp</span>
                 <input
                   type="text"
-                  id="new-category-input"
-                  placeholder="Misal: CICILAN, PULSA..."
-                  class="flex-1 px-3 py-2 rounded-xl bg-white border border-indigo-200 text-xs font-bold uppercase text-slate-800 focus:outline-none focus:border-indigo-500"
+                  inputmode="numeric"
+                  id="tx-nominal"
+                  placeholder="0"
+                  required
+                  oninput="formatNominalInput(this)"
+                  class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xl font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
                 />
+              </div>
+              <!-- Tombol Cepat Nominal (+10rb, +50rb, +100rb) -->
+              <div class="flex gap-2 mt-2 overflow-x-auto no-scrollbar">
+                <button type="button" onclick="addQuickNominal(10000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+10rb</button>
+                <button type="button" onclick="addQuickNominal(50000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+50rb</button>
+                <button type="button" onclick="addQuickNominal(100000)" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 shrink-0 cursor-pointer">+100rb</button>
+                <button type="button" onclick="clearNominal()" class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-xs font-bold text-rose-600 shrink-0 ml-auto cursor-pointer">Reset</button>
+              </div>
+            </div>
+
+            <!-- 2. KETERANGAN (Free Text) -->
+            <div>
+              <label for="tx-keterangan" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                2. Keterangan
+              </label>
+              <input
+                type="text"
+                id="tx-keterangan"
+                placeholder="Contoh: Bakmie, Shopee, Listrik..."
+                required
+                class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+              />
+            </div>
+
+            <!-- 3. KATEGORI (Pilih List atau Tambah Baru) -->
+            <div>
+              <div class="flex items-center justify-between mb-1.5">
+                <label for="tx-kategori" class="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  3. Kategori
+                </label>
                 <button
                   type="button"
-                  onclick="confirmAddNewCategory()"
-                  class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
+                  id="btn-toggle-new-cat"
+                  onclick="toggleNewCategoryBox()"
+                  class="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer"
                 >
-                  Pakai
+                  <span>+ Tambah Kategori Baru</span>
                 </button>
+              </div>
+
+              <select
+                id="tx-kategori"
+                onchange="refreshCategoryDropdown(this.value)"
+                class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+              ></select>
+
+              <!-- Quick category chips -->
+              <div id="category-chips" class="flex flex-wrap gap-1.5 mt-2.5"></div>
+
+              <!-- Add New Category Inline Box -->
+              <div id="new-category-box" class="hidden mt-3 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                <label for="new-category-input" class="block text-[11px] font-bold text-indigo-900">Nama Kategori Baru</label>
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    id="new-category-input"
+                    placeholder="Misal: CICILAN, PULSA..."
+                    class="flex-1 px-3 py-2 rounded-xl bg-white border border-indigo-200 text-xs font-bold uppercase text-slate-800 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onclick="confirmAddNewCategory()"
+                    class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition cursor-pointer"
+                  >
+                    Pakai
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- TANGGAL TRANSAKSI -->
+          <!-- ==================== FIELDS KHUSUS INVESTASI (TYPE = INVEST) ==================== -->
+          <div id="invest-fields" class="hidden space-y-5">
+            <!-- 1. KODE INVEST (2 Pilihan: BBCA/IDR & BTC/IDR) -->
+            <div>
+              <label for="inv-kode" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                1. Kode Invest
+              </label>
+              <div class="grid grid-cols-2 gap-2.5">
+                <label class="cursor-pointer">
+                  <input type="radio" name="inv-kode-radio" value="BBCA/IDR" checked class="peer sr-only" onchange="handleInvestCodeChange('BBCA/IDR')" />
+                  <div class="p-3 rounded-2xl border border-slate-200 bg-slate-50 peer-checked:bg-indigo-50 peer-checked:border-indigo-600 peer-checked:text-indigo-900 transition">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-extrabold">BBCA/IDR</span>
+                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">IDX</span>
+                    </div>
+                    <p class="text-[10px] text-slate-500 mt-1">Bank Central Asia</p>
+                  </div>
+                </label>
+
+                <label class="cursor-pointer">
+                  <input type="radio" name="inv-kode-radio" value="BTC/IDR" class="peer sr-only" onchange="handleInvestCodeChange('BTC/IDR')" />
+                  <div class="p-3 rounded-2xl border border-slate-200 bg-slate-50 peer-checked:bg-amber-50 peer-checked:border-amber-500 peer-checked:text-amber-950 transition">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-extrabold">BTC/IDR</span>
+                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">CRYPTO</span>
+                    </div>
+                    <p class="text-[10px] text-slate-500 mt-1">Bitcoin Rupiah</p>
+                  </div>
+                </label>
+              </div>
+              <input type="hidden" id="inv-kode" value="BBCA/IDR" />
+            </div>
+
+            <!-- 2. AMOUNT / LOT -->
+            <div>
+              <label for="inv-lot" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                2. Amount / Lot
+              </label>
+              <input
+                type="number"
+                inputmode="decimal"
+                step="any"
+                min="0"
+                id="inv-lot"
+                placeholder="Contoh: 10 atau 0.005"
+                oninput="updateInvestPreview()"
+                class="w-full px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-lg font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+              />
+            </div>
+
+            <!-- 3. PRICE WHEN BUY / AVERAGE BUY -->
+            <div>
+              <label for="inv-avg-price" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                3. Price When Buy / Average Buy (Rp)
+              </label>
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-base font-extrabold text-slate-400">Rp</span>
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  id="inv-avg-price"
+                  placeholder="0"
+                  oninput="formatNominalInput(this); updateInvestPreview();"
+                  class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-lg font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+                />
+              </div>
+
+              <!-- Preview Estimasi Total Modal -->
+              <div class="mt-2.5 p-3 rounded-2xl bg-indigo-50/80 border border-indigo-100 flex items-center justify-between">
+                <span class="text-[11px] font-bold text-indigo-800">Estimasi Total Modal:</span>
+                <span id="inv-total-preview" class="text-sm font-extrabold text-indigo-950">Rp 0</span>
+              </div>
+            </div>
+
+            <!-- Catatan Opsional Investasi -->
+            <div>
+              <label for="inv-note" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                Catatan Pembelian <span class="text-slate-400 font-normal">(Opsional)</span>
+              </label>
+              <input
+                type="text"
+                id="inv-note"
+                placeholder="Contoh: Cicil bulanan, Bibit, Tokocrypto..."
+                class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 transition"
+              />
+            </div>
+          </div>
+
+          <!-- 4. TANGGAL TRANSAKSI (Today [Default] / Custom Calendar) -->
           <div>
-            <label for="tx-tanggal" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-              Tanggal Transaksi
+            <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+              <span id="date-field-number">4.</span> Tanggal Transaksi
             </label>
-            <input
-              type="date"
-              id="tx-tanggal"
-              required
-              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 transition"
-            />
+            <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-2.5">
+              <label class="cursor-pointer">
+                <input type="radio" name="tx-date-mode" value="today" checked class="peer sr-only" onchange="handleDateModeChange()" />
+                <div class="py-2 px-3 rounded-lg text-center text-xs font-bold text-slate-500 peer-checked:bg-white peer-checked:text-slate-900 peer-checked:shadow-xs transition">
+                  Today (Default)
+                </div>
+              </label>
+              <label class="cursor-pointer">
+                <input type="radio" name="tx-date-mode" value="custom" class="peer sr-only" onchange="handleDateModeChange()" />
+                <div class="py-2 px-3 rounded-lg text-center text-xs font-bold text-slate-500 peer-checked:bg-white peer-checked:text-indigo-600 peer-checked:shadow-xs transition">
+                  Custom Calendar
+                </div>
+              </label>
+            </div>
+
+            <div id="today-date-display" class="px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 flex items-center justify-between">
+              <span>📅 Hari Ini</span>
+              <span id="today-date-label" class="text-indigo-600">20 Nov 2026</span>
+            </div>
+
+            <div id="custom-date-box" class="hidden">
+              <input
+                type="date"
+                id="tx-tanggal"
+                class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 transition"
+              />
+            </div>
           </div>
 
           <!-- SUBMIT BUTTON -->
@@ -433,23 +605,14 @@ function doPost(e) {
         </form>
 
         <!-- MINI RECENT PREVIEW -->
-        <div class="bg-white rounded-3xl p-4 shadow-sm border border-slate-100">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Transaksi Terakhir</h3>
-            <button type="button" onclick="switchTab('history')" class="text-xs font-bold text-indigo-600 cursor-pointer">Lihat Semua →</button>
-          </div>
-          <div id="recent-mini-list" class="space-y-2.5"></div>
-        </div>
-      </section>
+      <!-- ==================== TAB 2: DASHBOARD REPORT (PAGINATED 3 PAGES) ==================== -->
+      <section id="tab-dashboard" class="hidden p-5 space-y-4 animate-fade-up">
 
-      <!-- ==================== TAB 2: DASHBOARD REPORT ==================== -->
-      <section id="tab-dashboard" class="hidden p-5 space-y-5 animate-fade-up">
-
-        <!-- Filter & Refresh Bar -->
+        <!-- Header & Sync Bar -->
         <div class="flex items-center justify-between gap-2">
           <div>
             <h2 class="text-lg font-extrabold text-slate-900">Laporan Keuangan</h2>
-            <p class="text-xs text-slate-500">Ringkasan Pengeluaran & Pemasukan</p>
+            <p class="text-xs text-slate-500" id="dash-subtitle">Halaman 1 dari 3 • Bulanan</p>
           </div>
           <button
             type="button"
@@ -464,100 +627,218 @@ function doPost(e) {
           </button>
         </div>
 
-        <!-- Month Filter for Summary & Category Report -->
-        <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
-          <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
-          <select
-            id="dash-month-filter"
-            onchange="renderDashboard()"
-            class="px-3 py-1.5 rounded-xl bg-slate-100 text-xs font-bold text-slate-800 focus:outline-none"
+        <!-- SUB-PAGE REPORT SELECTOR TABS (UX Pilihan Report) -->
+        <div class="grid grid-cols-3 gap-1.5 p-1.5 bg-slate-200/80 rounded-2xl">
+          <button
+            type="button"
+            onclick="switchDashboardPage(1)"
+            id="dash-tab-btn-1"
+            class="py-2 px-2 rounded-xl text-[11px] font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer"
           >
-            <option value="ALL">Semua Bulan</option>
-          </select>
+            1. Bulanan
+          </button>
+          <button
+            type="button"
+            onclick="switchDashboardPage(2)"
+            id="dash-tab-btn-2"
+            class="py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
+          >
+            2. Kategori
+          </button>
+          <button
+            type="button"
+            onclick="switchDashboardPage(3)"
+            id="dash-tab-btn-3"
+            class="py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
+          >
+            3. Investasi
+          </button>
         </div>
 
-        <!-- KPI SUMMARY CARDS -->
-        <div class="grid grid-cols-2 gap-3">
-          <div class="bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
-            <div class="flex items-center gap-1.5 text-emerald-700 text-xs font-bold">
-              <span>💰</span> Pemasukan
+        <!-- ==================== DASHBOARD PAGE 1: BULANAN PENGELUARAN VS PEMASUKAN ==================== -->
+        <div id="dash-page-1" class="space-y-4 animate-fade-up">
+          <!-- Month Filter -->
+          <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
+            <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
+            <select
+              id="dash-month-filter"
+              onchange="syncMonthFilters(this.value); renderDashboard();"
+              class="px-3 py-1.5 rounded-xl bg-slate-100 text-xs font-bold text-slate-800 focus:outline-none"
+            >
+              <option value="ALL">Semua Bulan</option>
+            </select>
+          </div>
+
+          <!-- KPI SUMMARY CARDS -->
+          <div class="grid grid-cols-2 gap-3">
+            <div class="bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
+              <div class="flex items-center gap-1.5 text-emerald-700 text-xs font-bold">
+                <span>💰</span> Pemasukan
+              </div>
+              <p id="kpi-income" class="text-base font-extrabold text-emerald-900 mt-1.5 truncate">Rp 0</p>
             </div>
-            <p id="kpi-income" class="text-base font-extrabold text-emerald-900 mt-1.5 truncate">Rp 0</p>
-          </div>
 
-          <div class="bg-rose-50 border border-rose-100 rounded-3xl p-4">
-            <div class="flex items-center gap-1.5 text-rose-700 text-xs font-bold">
-              <span>💸</span> Pengeluaran
+            <div class="bg-rose-50 border border-rose-100 rounded-3xl p-4">
+              <div class="flex items-center gap-1.5 text-rose-700 text-xs font-bold">
+                <span>💸</span> Pengeluaran
+              </div>
+              <p id="kpi-expense" class="text-base font-extrabold text-rose-900 mt-1.5 truncate">Rp 0</p>
             </div>
-            <p id="kpi-expense" class="text-base font-extrabold text-rose-900 mt-1.5 truncate">Rp 0</p>
-          </div>
 
-          <div class="col-span-2 bg-slate-900 text-white rounded-3xl p-4 flex items-center justify-between">
-            <div>
-              <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Selisih / Cashflow Bersih</p>
-              <p id="kpi-balance" class="text-xl font-extrabold mt-0.5">Rp 0</p>
+            <div class="col-span-2 bg-slate-900 text-white rounded-3xl p-4 flex items-center justify-between">
+              <div>
+                <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Selisih / Cashflow Bersih</p>
+                <p id="kpi-balance" class="text-xl font-extrabold mt-0.5">Rp 0</p>
+              </div>
+              <span id="kpi-status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300">
+                Seimbang
+              </span>
             </div>
-            <span id="kpi-status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300">
-              Seimbang
-            </span>
-          </div>
-        </div>
-
-        <!-- REPORT 1: BULANAN PENGELUARAN VS PEMASUKAN -->
-        <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
-          <div>
-            <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
-              Report 1
-            </span>
-            <h3 class="text-base font-extrabold text-slate-900 mt-2">Bulanan: Pengeluaran vs Pemasukan</h3>
-            <p class="text-xs text-slate-500">Perbandingan arus kas masuk dan keluar tiap bulan</p>
           </div>
 
-          <div class="relative h-56 w-full">
-            <canvas id="monthlyChart"></canvas>
-          </div>
-
-          <!-- Monthly Breakdown Table -->
-          <div id="monthly-breakdown-list" class="divide-y divide-slate-100 pt-2"></div>
-        </div>
-
-        <!-- REPORT 2: BERDASARKAN KATEGORI -->
-        <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
-          <div class="flex items-start justify-between gap-2">
+          <!-- REPORT 1 CARD -->
+          <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
             <div>
               <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
-                Report 2
+                Report 1 • Page 1/3
               </span>
-              <h3 class="text-base font-extrabold text-slate-900 mt-2">Berdasarkan Kategori</h3>
+              <h3 class="text-base font-extrabold text-slate-900 mt-2">Bulanan: Pengeluaran vs Pemasukan</h3>
+              <p class="text-xs text-slate-500">Perbandingan arus kas masuk dan keluar tiap bulan</p>
             </div>
 
-            <!-- Toggle Pengeluaran / Pemasukan for Category Report -->
-            <div class="flex bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
+            <div class="relative h-56 w-full">
+              <canvas id="monthlyChart"></canvas>
+            </div>
+
+            <!-- Monthly Breakdown Table -->
+            <div id="monthly-breakdown-list" class="divide-y divide-slate-100 pt-2"></div>
+          </div>
+        </div>
+
+        <!-- ==================== DASHBOARD PAGE 2: BERDASARKAN KATEGORI ==================== -->
+        <div id="dash-page-2" class="hidden space-y-4 animate-fade-up">
+          <!-- Month Filter Page 2 -->
+          <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
+            <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
+            <select
+              id="dash-month-filter-p2"
+              onchange="syncMonthFilters(this.value); renderDashboard();"
+              class="px-3 py-1.5 rounded-xl bg-slate-100 text-xs font-bold text-slate-800 focus:outline-none"
+            >
+              <option value="ALL">Semua Bulan</option>
+            </select>
+          </div>
+
+          <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+                  Report 2 • Page 2/3
+                </span>
+                <h3 class="text-base font-extrabold text-slate-900 mt-2">Berdasarkan Kategori</h3>
+              </div>
+
+              <!-- Toggle Pengeluaran / Pemasukan for Category Report -->
+              <div class="flex bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
+                <button
+                  type="button"
+                  id="cat-filter-expense"
+                  onclick="setCategoryReportType('Pengeluaran')"
+                  class="px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition cursor-pointer"
+                >
+                  Keluar
+                </button>
+                <button
+                  type="button"
+                  id="cat-filter-income"
+                  onclick="setCategoryReportType('Pemasukan')"
+                  class="px-2.5 py-1 rounded-lg text-slate-500 transition cursor-pointer"
+                >
+                  Masuk
+                </button>
+              </div>
+            </div>
+
+            <div class="relative h-52 w-full flex items-center justify-center">
+              <canvas id="categoryChart"></canvas>
+            </div>
+
+            <!-- Category Ranking List -->
+            <div id="category-breakdown-list" class="space-y-3 pt-2"></div>
+          </div>
+        </div>
+
+        <!-- ==================== DASHBOARD PAGE 3: VALUE INVESTMENT TODAY ==================== -->
+        <div id="dash-page-3" class="hidden space-y-4 animate-fade-up">
+
+          <!-- Header Card & Refresh Google Price -->
+          <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 text-white rounded-3xl p-5 shadow-lg space-y-4">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-300 bg-indigo-500/20 px-2.5 py-1 rounded-full">
+                  Report 3 • Page 3/3
+                </span>
+                <h3 class="text-lg font-extrabold mt-2">Value Investment Today</h3>
+                <p class="text-[11px] text-slate-400" id="invest-price-source">Sumber harga: Google Finance API</p>
+              </div>
+
               <button
                 type="button"
-                id="cat-filter-expense"
-                onclick="setCategoryReportType('Pengeluaran')"
-                class="px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition cursor-pointer"
+                onclick="refreshInvestmentPrices(true)"
+                id="btn-refresh-price"
+                class="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold shadow-sm transition shrink-0 cursor-pointer"
               >
-                Keluar
+                ↻ Harga Google
               </button>
-              <button
-                type="button"
-                id="cat-filter-income"
-                onclick="setCategoryReportType('Pemasukan')"
-                class="px-2.5 py-1 rounded-lg text-slate-500 transition cursor-pointer"
-              >
-                Masuk
-              </button>
+            </div>
+
+            <div class="pt-2 border-t border-white/10 grid grid-cols-2 gap-3">
+              <div>
+                <p class="text-[10px] font-semibold text-slate-400 uppercase">Total Nilai Hari Ini</p>
+                <p id="inv-summary-current" class="text-base font-extrabold text-white mt-0.5">Rp 0</p>
+              </div>
+              <div>
+                <p class="text-[10px] font-semibold text-slate-400 uppercase">Total Modal Beli</p>
+                <p id="inv-summary-modal" class="text-base font-extrabold text-slate-300 mt-0.5">Rp 0</p>
+              </div>
+              <div class="col-span-2 bg-white/5 rounded-2xl p-3 flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-300">Total Return Investasi</span>
+                <span id="inv-summary-return" class="text-sm font-extrabold text-slate-200">Rp 0</span>
+              </div>
             </div>
           </div>
 
-          <div class="relative h-52 w-full flex items-center justify-center">
-            <canvas id="categoryChart"></canvas>
-          </div>
+          <!-- Asset Cards Container (BBCA/IDR & BTC/IDR) -->
+          <div id="investment-assets-container" class="space-y-3"></div>
 
-          <!-- Category Ranking List -->
-          <div id="category-breakdown-list" class="space-y-3 pt-2"></div>
+          <!-- Investment Purchase History -->
+          <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3">
+            <h4 class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Riwayat Pembelian Investasi</h4>
+            <div id="investment-history-list" class="space-y-2.5"></div>
+          </div>
+        </div>
+
+        <!-- PAGINATION BAR (< Sebelumnya | Halaman X / 3 | Berikutnya >) -->
+        <div class="bg-white rounded-2xl p-2.5 border border-slate-200 shadow-xs flex items-center justify-between">
+          <button
+            type="button"
+            onclick="prevDashboardPage()"
+            id="btn-dash-prev"
+            class="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-xs font-bold text-slate-700 transition cursor-pointer"
+          >
+            ‹ Sebelumnya
+          </button>
+          <span id="dash-pagination-indicator" class="text-xs font-extrabold text-slate-800">
+            Halaman 1 / 3
+          </span>
+          <button
+            type="button"
+            onclick="nextDashboardPage()"
+            id="btn-dash-next"
+            class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-xs font-bold text-white transition cursor-pointer"
+          >
+            Berikutnya ›
+          </button>
         </div>
       </section>
 
@@ -610,6 +891,7 @@ function doPost(e) {
               <option value="ALL">Semua Tipe</option>
               <option value="Pengeluaran">Pengeluaran</option>
               <option value="Pemasukan">Pemasukan</option>
+              <option value="Invest">Invest</option>
             </select>
 
             <select
@@ -769,17 +1051,34 @@ function doPost(e) {
     let customCategories = [];
     let categoryReportType = "Pengeluaran";
     let historyUserFilter = "ALL";
+    let currentDashboardPage = 1;
     let monthlyChartInstance = null;
     let categoryChartInstance = null;
+
+    // Harga Pasar Live untuk Investasi (BBCA/IDR & BTC/IDR)
+    let liveMarketPrices = {
+      "BBCA/IDR": 0,
+      "BTC/IDR": 0
+    };
+    let priceSourceLabel = "Menunggu pembaruan harga Google...";
 
     // =========================================================================
     // 2. INISIALISASI HALAMAN (Aman terhadap cache rusak)
     // =========================================================================
     document.addEventListener("DOMContentLoaded", function () {
       try {
-        const todayStr = new Date().toISOString().split("T")[0];
+        const todayStr = getTodayISO();
         const dateEl = document.getElementById("tx-tanggal");
         if (dateEl) dateEl.value = todayStr;
+
+        const todayLabelEl = document.getElementById("today-date-label");
+        if (todayLabelEl) {
+          todayLabelEl.textContent = new Date().toLocaleDateString("id-ID", {
+            day: "numeric",
+            month: "short",
+            year: "numeric"
+          });
+        }
 
         const options = { weekday: "long", day: "numeric", month: "short", year: "numeric" };
         const headerDateEl = document.getElementById("header-date");
@@ -838,6 +1137,15 @@ function doPost(e) {
             );
           }
         }
+
+        const rawPrices = localStorage.getItem("kv_finance_market_prices");
+        if (rawPrices) {
+          const parsedPrices = JSON.parse(rawPrices);
+          if (parsedPrices && typeof parsedPrices === "object") {
+            if (Number(parsedPrices["BBCA/IDR"]) > 0) liveMarketPrices["BBCA/IDR"] = Number(parsedPrices["BBCA/IDR"]);
+            if (Number(parsedPrices["BTC/IDR"]) > 0) liveMarketPrices["BTC/IDR"] = Number(parsedPrices["BTC/IDR"]);
+          }
+        }
       } catch (err) {
         try { localStorage.clear(); } catch (e) {}
         transactions = [];
@@ -849,8 +1157,26 @@ function doPost(e) {
       try {
         localStorage.setItem("kv_finance_transactions", JSON.stringify(transactions));
         localStorage.setItem("kv_finance_categories", JSON.stringify(customCategories));
+        localStorage.setItem("kv_finance_market_prices", JSON.stringify(liveMarketPrices));
       } catch (err) {
         // Ignore quota/storage errors
+      }
+    }
+
+    function getTodayISO() {
+      try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "Asia/Jakarta",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        }).formatToParts(new Date());
+        const y = parts.find(function (p) { return p.type === "year"; }).value;
+        const m = parts.find(function (p) { return p.type === "month"; }).value;
+        const d = parts.find(function (p) { return p.type === "day"; }).value;
+        return y + "-" + m + "-" + d;
+      } catch (e) {
+        return new Date().toISOString().split("T")[0];
       }
     }
 
@@ -944,6 +1270,8 @@ function doPost(e) {
 
       if (getScriptUrl()) {
         syncFromGoogleSheet(false);
+      } else {
+        refreshInvestmentPrices(false);
       }
     }
 
@@ -1039,7 +1367,18 @@ function doPost(e) {
 
     function normalizeTransactionRow(raw) {
       if (!raw || typeof raw !== "object") {
-        return { tanggal: "", date: "", type: "Pengeluaran", nominal: 0, keterangan: "", kategori: "OTHER", user: "" };
+        return {
+          tanggal: "",
+          date: "",
+          type: "Pengeluaran",
+          nominal: 0,
+          keterangan: "",
+          kategori: "OTHER",
+          user: "",
+          kodeInvest: "",
+          lot: 0,
+          avgPrice: 0
+        };
       }
 
       // Deteksi otomatis jika payload berasal dari Apps Script versi lama
@@ -1059,23 +1398,40 @@ function doPost(e) {
           keterangan: String(raw.type || "").trim(),
           kategori: String(raw.kategori || "OTHER").trim().toUpperCase() || "OTHER",
           type: String(raw.user || "").trim().toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
-          user: ""
+          user: "",
+          kodeInvest: "",
+          lot: 0,
+          avgPrice: 0
         };
       }
 
       const isoDate = parseSheetDateToISO(raw.date || raw.tanggal || raw.Date || "");
-      const rawType = String(raw.type || raw.Type || "").trim();
-      const type = rawType.toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran";
+      const rawType = String(raw.type || raw.Type || "").trim().toLowerCase();
+      let type = "Pengeluaran";
+      if (rawType === "pemasukan") type = "Pemasukan";
+      else if (rawType === "invest") type = "Invest";
+
       const kategori = String(raw.kategori || raw.Kategori || "OTHER").trim().toUpperCase() || "OTHER";
+      const kodeInvest = String(raw.kodeInvest || raw.Kode_Invest || "").trim().toUpperCase();
+      const lot = parseFloat(String(raw.lot || raw.Lot || "0").replace(",", ".")) || 0;
+      const avgPrice = parseNominalValue(raw.avgPrice !== undefined ? raw.avgPrice : raw.Avg_Price);
+      let nominal = parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran);
+
+      if (type === "Invest" && nominal === 0 && lot > 0 && avgPrice > 0) {
+        nominal = Math.round(lot * avgPrice);
+      }
 
       return {
         tanggal: isoDate,
         date: formatISOToDDMMYYYY(isoDate) || String(raw.date || ""),
-        nominal: parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran),
+        nominal: nominal,
         keterangan: String(raw.keterangan || raw.Keterangan || "").trim(),
         kategori: kategori,
         type: type,
-        user: String(raw.user || raw.User || "").trim()
+        user: String(raw.user || raw.User || "").trim(),
+        kodeInvest: kodeInvest,
+        lot: lot,
+        avgPrice: avgPrice
       };
     }
 
@@ -1208,6 +1564,23 @@ function doPost(e) {
               customCategories.push(row.kategori);
             }
           });
+
+          // Ambil harga GOOGLEFINANCE jika tersedia dari Apps Script
+          if (json.prices && typeof json.prices === "object") {
+            let hasSheetPrice = false;
+            if (Number(json.prices["BBCA/IDR"]) > 0) {
+              liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+              hasSheetPrice = true;
+            }
+            if (Number(json.prices["BTC/IDR"]) > 0) {
+              liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
+              hasSheetPrice = true;
+            }
+            if (hasSheetPrice) {
+              priceSourceLabel = "Google Finance (Sheet) • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+            }
+          }
+
           saveLocalState();
           refreshCategoryDropdown();
           populateMonthFilter();
@@ -1215,6 +1588,10 @@ function doPost(e) {
           renderRecentMiniList();
           renderDashboard();
           renderFullHistory();
+
+          // Lengkapi harga yang masih 0 lewat API Google / Live Market di browser
+          await refreshInvestmentPrices(false);
+
           if (showNotification) {
             showToast("Sinkronisasi berhasil (" + transactions.length + " data)!", "✅");
           }
@@ -1229,7 +1606,7 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 6. FORM INPUT TRANSAKSI & MANAJEMEN KATEGORI
+    // 6. FORM INPUT TRANSAKSI (PENGELUARAN, PEMASUKAN, INVEST) & TANGGAL
     // =========================================================================
     function getSelectedType() {
       const checked = document.querySelector('input[name="tx-type"]:checked');
@@ -1238,19 +1615,95 @@ function doPost(e) {
 
     function handleTypeChange() {
       const type = getSelectedType();
+      const standardBox = document.getElementById("standard-fields");
+      const investBox = document.getElementById("invest-fields");
       const submitBtn = document.getElementById("btn-submit-tx");
       const btnText = document.getElementById("submit-btn-text");
+      const nominalEl = document.getElementById("tx-nominal");
+      const ketEl = document.getElementById("tx-keterangan");
+      const invLotEl = document.getElementById("inv-lot");
+      const invPriceEl = document.getElementById("inv-avg-price");
 
-      if (type === "Pengeluaran") {
+      if (type === "Invest") {
+        standardBox.classList.add("hidden");
+        investBox.classList.remove("hidden");
+        if (nominalEl) nominalEl.required = false;
+        if (ketEl) ketEl.required = false;
+        if (invLotEl) invLotEl.required = true;
+        if (invPriceEl) invPriceEl.required = true;
+
         submitBtn.className =
-          "w-full py-4 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-2 cursor-pointer";
-        btnText.textContent = "Simpan Pengeluaran";
+          "w-full py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-indigo-600/25 transition flex items-center justify-center gap-2 cursor-pointer";
+        btnText.textContent = "Simpan Investasi";
       } else {
-        submitBtn.className =
-          "w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2 cursor-pointer";
-        btnText.textContent = "Simpan Pemasukan";
+        investBox.classList.add("hidden");
+        standardBox.classList.remove("hidden");
+        if (nominalEl) nominalEl.required = true;
+        if (ketEl) ketEl.required = true;
+        if (invLotEl) invLotEl.required = false;
+        if (invPriceEl) invPriceEl.required = false;
+
+        if (type === "Pengeluaran") {
+          submitBtn.className =
+            "w-full py-4 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-2 cursor-pointer";
+          btnText.textContent = "Simpan Pengeluaran";
+        } else {
+          submitBtn.className =
+            "w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2 cursor-pointer";
+          btnText.textContent = "Simpan Pemasukan";
+        }
+        refreshCategoryDropdown();
       }
-      refreshCategoryDropdown();
+    }
+
+    function handleInvestCodeChange(code) {
+      const hiddenEl = document.getElementById("inv-kode");
+      if (hiddenEl) hiddenEl.value = code;
+      updateInvestPreview();
+    }
+
+    function updateInvestPreview() {
+      const lotVal = parseFloat(String(document.getElementById("inv-lot").value || "0").replace(",", ".")) || 0;
+      const priceVal = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
+      const estTotal = Math.round(lotVal * priceVal);
+      const previewEl = document.getElementById("inv-total-preview");
+      if (previewEl) {
+        previewEl.textContent = formatRupiah(estTotal);
+      }
+    }
+
+    function handleDateModeChange() {
+      const modeEl = document.querySelector('input[name="tx-date-mode"]:checked');
+      const mode = modeEl ? modeEl.value : "today";
+      const todayBox = document.getElementById("today-date-display");
+      const customBox = document.getElementById("custom-date-box");
+      const dateInput = document.getElementById("tx-tanggal");
+
+      if (mode === "custom") {
+        todayBox.classList.add("hidden");
+        customBox.classList.remove("hidden");
+        if (dateInput) {
+          dateInput.required = true;
+          if (!dateInput.value) dateInput.value = getTodayISO();
+        }
+      } else {
+        customBox.classList.add("hidden");
+        todayBox.classList.remove("hidden");
+        if (dateInput) {
+          dateInput.required = false;
+          dateInput.value = getTodayISO();
+        }
+      }
+    }
+
+    function getSelectedTransactionDateISO() {
+      const modeEl = document.querySelector('input[name="tx-date-mode"]:checked');
+      const mode = modeEl ? modeEl.value : "today";
+      if (mode === "custom") {
+        const customVal = document.getElementById("tx-tanggal").value;
+        return customVal || getTodayISO();
+      }
+      return getTodayISO();
     }
 
     function getAllAvailableCategories() {
@@ -1353,25 +1806,64 @@ function doPost(e) {
     async function handleTransactionSubmit(e) {
       e.preventDefault();
       const type = getSelectedType();
-      const nominal = getRawNominal();
-      const keterangan = document.getElementById("tx-keterangan").value.trim();
-      const kategori = document.getElementById("tx-kategori").value;
-      const tanggal = document.getElementById("tx-tanggal").value;
+      const tanggal = getSelectedTransactionDateISO();
+      const dateDDMMYYYY = formatISOToDDMMYYYY(tanggal);
 
-      if (nominal <= 0) {
-        showToast("Nominal harus lebih dari 0", "⚠️");
-        return;
+      let newEntry = null;
+
+      if (type === "Invest") {
+        const kodeInvest = (document.getElementById("inv-kode").value || "BBCA/IDR").trim().toUpperCase();
+        const lot = parseFloat(String(document.getElementById("inv-lot").value || "0").replace(",", ".")) || 0;
+        const avgPrice = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
+        const note = document.getElementById("inv-note").value.trim();
+
+        if (lot <= 0) {
+          showToast("Amount / Lot harus lebih dari 0", "⚠️");
+          return;
+        }
+        if (avgPrice <= 0) {
+          showToast("Price When Buy / Average Buy harus lebih dari 0", "⚠️");
+          return;
+        }
+
+        const totalModal = Math.round(lot * avgPrice);
+        const autoKet = kodeInvest + " (" + lot + " lot @ " + formatRupiah(avgPrice) + ")" + (note ? " - " + note : "");
+
+        newEntry = {
+          tanggal: tanggal,
+          date: dateDDMMYYYY,
+          type: "Invest",
+          nominal: totalModal,
+          keterangan: autoKet,
+          kategori: "INVEST",
+          user: currentUser,
+          kodeInvest: kodeInvest,
+          lot: lot,
+          avgPrice: avgPrice
+        };
+      } else {
+        const nominal = getRawNominal();
+        const keterangan = document.getElementById("tx-keterangan").value.trim();
+        const kategori = document.getElementById("tx-kategori").value;
+
+        if (nominal <= 0) {
+          showToast("Nominal harus lebih dari 0", "⚠️");
+          return;
+        }
+
+        newEntry = {
+          tanggal: tanggal,
+          date: dateDDMMYYYY, // Format ddmmyyyy untuk Kolom D Sheet
+          type: type,
+          nominal: nominal,
+          keterangan: keterangan,
+          kategori: kategori.trim().toUpperCase(),
+          user: currentUser,
+          kodeInvest: "",
+          lot: 0,
+          avgPrice: 0
+        };
       }
-
-      const newEntry = {
-        tanggal: tanggal,
-        date: formatISOToDDMMYYYY(tanggal), // Format ddmmyyyy untuk Kolom D Sheet
-        type: type,
-        nominal: nominal,
-        keterangan: keterangan,
-        kategori: kategori.trim().toUpperCase(),
-        user: currentUser
-      };
 
       const btn = document.getElementById("btn-submit-tx");
       const btnText = document.getElementById("submit-btn-text");
@@ -1398,9 +1890,17 @@ function doPost(e) {
         showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
       }
 
+      // Reset form kembali ke default (Pengeluaran + Today)
       document.getElementById("tx-nominal").value = "";
       document.getElementById("tx-keterangan").value = "";
+      document.getElementById("inv-lot").value = "";
+      document.getElementById("inv-avg-price").value = "";
+      document.getElementById("inv-note").value = "";
+      updateInvestPreview();
+
       document.querySelector('input[name="tx-type"][value="Pengeluaran"]').checked = true;
+      document.querySelector('input[name="tx-date-mode"][value="today"]').checked = true;
+      handleDateModeChange();
       handleTypeChange();
 
       btn.disabled = false;
@@ -1430,7 +1930,7 @@ function doPost(e) {
 
       if (tabName === "dashboard") {
         populateMonthFilter();
-        renderDashboard();
+        switchDashboardPage(currentDashboardPage);
       } else if (tabName === "history") {
         populateHistoryFilters();
         renderFullHistory();
@@ -1440,13 +1940,14 @@ function doPost(e) {
     }
 
     function formatRupiah(num) {
-      return "Rp " + (Number(num) || 0).toLocaleString("id-ID");
+      return "Rp " + Math.round(Number(num) || 0).toLocaleString("id-ID");
     }
 
     function createTransactionItemHTML(tx) {
-      const isExpense = tx.type === "Pengeluaran";
-      const amountClass = isExpense ? "text-rose-600" : "text-emerald-600";
-      const sign = isExpense ? "-" : "+";
+      const isIncome = tx.type === "Pemasukan";
+      const isInvest = tx.type === "Invest";
+      const amountClass = isInvest ? "text-indigo-600" : isIncome ? "text-emerald-600" : "text-rose-600";
+      const sign = isInvest ? "" : isIncome ? "+" : "-";
       const userBadge = tx.user
         ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ' +
           (tx.user === "Kevin"
@@ -1456,11 +1957,17 @@ function doPost(e) {
           escapeHTML(tx.user) +
           "</span>"
         : "";
+      const investBadge = isInvest && tx.kodeInvest
+        ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-600 text-white">' +
+          escapeHTML(tx.kodeInvest) +
+          "</span>"
+        : "";
 
       return (
         '<div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">' +
         '<div class="min-w-0 flex-1">' +
         '<div class="flex items-center flex-wrap gap-1.5 mb-1">' +
+        investBadge +
         '<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">' +
         escapeHTML(tx.kategori || "OTHER") +
         "</span>" +
@@ -1603,12 +2110,76 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 8. DASHBOARD ANALYTICS & CHARTS (Chart.js)
+    // 8. DASHBOARD PAGINATION, ANALYTICS & INVESTMENT TRACKER
     // =========================================================================
+    function switchDashboardPage(pageNum) {
+      currentDashboardPage = pageNum;
+      const pageTitles = {
+        1: "Halaman 1 dari 3 • Bulanan Pengeluaran vs Pemasukan",
+        2: "Halaman 2 dari 3 • Pengeluaran & Pemasukan per Kategori",
+        3: "Halaman 3 dari 3 • Value Investment Today"
+      };
+
+      const subtitleEl = document.getElementById("dash-subtitle");
+      if (subtitleEl) subtitleEl.textContent = pageTitles[pageNum] || "";
+
+      const indicatorEl = document.getElementById("dash-pagination-indicator");
+      if (indicatorEl) indicatorEl.textContent = "Halaman " + pageNum + " / 3";
+
+      const prevBtn = document.getElementById("btn-dash-prev");
+      const nextBtn = document.getElementById("btn-dash-next");
+      if (prevBtn) prevBtn.disabled = pageNum <= 1;
+      if (nextBtn) nextBtn.disabled = pageNum >= 3;
+
+      [1, 2, 3].forEach(function (p) {
+        const pageEl = document.getElementById("dash-page-" + p);
+        const tabBtn = document.getElementById("dash-tab-btn-" + p);
+        if (pageEl) {
+          if (p === pageNum) pageEl.classList.remove("hidden");
+          else pageEl.classList.add("hidden");
+        }
+        if (tabBtn) {
+          tabBtn.className =
+            p === pageNum
+              ? "py-2 px-2 rounded-xl text-[11px] font-extrabold bg-white text-indigo-600 shadow-sm transition cursor-pointer"
+              : "py-2 px-2 rounded-xl text-[11px] font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer";
+        }
+      });
+
+      if (pageNum === 1 || pageNum === 2) {
+        renderDashboard();
+      } else if (pageNum === 3) {
+        renderInvestmentReport();
+        if (!liveMarketPrices["BBCA/IDR"] || !liveMarketPrices["BTC/IDR"]) {
+          refreshInvestmentPrices(false);
+        }
+      }
+    }
+
+    function prevDashboardPage() {
+      if (currentDashboardPage > 1) {
+        switchDashboardPage(currentDashboardPage - 1);
+      }
+    }
+
+    function nextDashboardPage() {
+      if (currentDashboardPage < 3) {
+        switchDashboardPage(currentDashboardPage + 1);
+      }
+    }
+
+    function syncMonthFilters(val) {
+      const f1 = document.getElementById("dash-month-filter");
+      const f2 = document.getElementById("dash-month-filter-p2");
+      if (f1) f1.value = val;
+      if (f2) f2.value = val;
+    }
+
     function populateMonthFilter() {
-      const select = document.getElementById("dash-month-filter");
-      if (!select) return;
-      const currentVal = select.value;
+      const select1 = document.getElementById("dash-month-filter");
+      const select2 = document.getElementById("dash-month-filter-p2");
+      if (!select1) return;
+      const currentVal = select1.value;
       const months = new Set();
 
       transactions.forEach(function (tx) {
@@ -1618,17 +2189,19 @@ function doPost(e) {
       });
 
       const sortedMonths = Array.from(months).sort();
-      select.innerHTML = '<option value="ALL">Semua Bulan</option>';
-      sortedMonths.forEach(function (ym) {
-        const opt = document.createElement("option");
-        opt.value = ym;
-        opt.textContent = formatYearMonthLabel(ym);
-        select.appendChild(opt);
+      [select1, select2].forEach(function (sel) {
+        if (!sel) return;
+        sel.innerHTML = '<option value="ALL">Semua Bulan</option>';
+        sortedMonths.forEach(function (ym) {
+          const opt = document.createElement("option");
+          opt.value = ym;
+          opt.textContent = formatYearMonthLabel(ym);
+          sel.appendChild(opt);
+        });
+        if (currentVal && (currentVal === "ALL" || sortedMonths.indexOf(currentVal) !== -1)) {
+          sel.value = currentVal;
+        }
       });
-
-      if (currentVal && (currentVal === "ALL" || sortedMonths.indexOf(currentVal) !== -1)) {
-        select.value = currentVal;
-      }
     }
 
     function formatYearMonthLabel(ym) {
@@ -1681,7 +2254,7 @@ function doPost(e) {
 
       filteredTx.forEach(function (tx) {
         if (tx.type === "Pemasukan") totalIncome += Number(tx.nominal) || 0;
-        else totalExpense += Number(tx.nominal) || 0;
+        else if (tx.type === "Pengeluaran") totalExpense += Number(tx.nominal) || 0;
       });
 
       const balance = totalIncome - totalExpense;
@@ -1711,13 +2284,14 @@ function doPost(e) {
       const monthlyMap = {};
 
       transactions.forEach(function (tx) {
+        if (tx.type === "Invest") return; // Investasi dilaporkan khusus di Report 3
         if (!tx.tanggal || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) return;
         const ym = tx.tanggal.substring(0, 7);
         if (!monthlyMap[ym]) {
           monthlyMap[ym] = { income: 0, expense: 0 };
         }
         if (tx.type === "Pemasukan") monthlyMap[ym].income += Number(tx.nominal) || 0;
-        else monthlyMap[ym].expense += Number(tx.nominal) || 0;
+        else if (tx.type === "Pengeluaran") monthlyMap[ym].expense += Number(tx.nominal) || 0;
       });
 
       const sortedMonths = Object.keys(monthlyMap).sort();
@@ -1904,6 +2478,239 @@ function doPost(e) {
           );
         })
         .join("");
+    }
+
+    // REPORT 3: Value Investment Today (BBCA/IDR & BTC/IDR)
+    async function refreshInvestmentPrices(showToastFlag) {
+      const btn = document.getElementById("btn-refresh-price");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Memuat...";
+      }
+
+      let updatedAny = false;
+
+      // 1. Jika URL Apps Script terpasang, coba sinkronisasi harga GOOGLEFINANCE dari Sheet terlebih dahulu
+      const scriptUrl = getScriptUrl();
+      if (scriptUrl && showToastFlag) {
+        try {
+          const res = await fetch(scriptUrl);
+          const json = await res.json();
+          if (json && json.prices) {
+            if (Number(json.prices["BBCA/IDR"]) > 0) {
+              liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+              updatedAny = true;
+            }
+            if (Number(json.prices["BTC/IDR"]) > 0) {
+              liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
+              updatedAny = true;
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2. Fallback / Direct Live Fetch untuk BTC/IDR (Coinbase & CoinGecko)
+      try {
+        const btcRes = await fetch("https://api.coinbase.com/v2/prices/BTC-IDR/spot");
+        const btcJson = await btcRes.json();
+        const btcSpot = Number(btcJson && btcJson.data && btcJson.data.amount);
+        if (btcSpot > 0) {
+          liveMarketPrices["BTC/IDR"] = Math.round(btcSpot);
+          updatedAny = true;
+        }
+      } catch (e) {
+        try {
+          const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr");
+          const cgJson = await cgRes.json();
+          const cgPrice = Number(cgJson && cgJson.bitcoin && cgJson.bitcoin.idr);
+          if (cgPrice > 0) {
+            liveMarketPrices["BTC/IDR"] = Math.round(cgPrice);
+            updatedAny = true;
+          }
+        } catch (err2) {}
+      }
+
+      // 3. Fallback / Direct Live Fetch untuk BBCA/IDR (IDX:BBCA via Yahoo Finance proxy)
+      if (!liveMarketPrices["BBCA/IDR"] || showToastFlag) {
+        try {
+          const yahooUrl = encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=1d");
+          const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
+          const bbcaWrapper = await bbcaRes.json();
+          if (bbcaWrapper && bbcaWrapper.contents) {
+            const parsedYahoo = JSON.parse(bbcaWrapper.contents);
+            const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
+            const marketPrice = Number(meta && meta.regularMarketPrice);
+            if (marketPrice > 0) {
+              liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
+              updatedAny = true;
+            }
+          }
+        } catch (e) {}
+      }
+
+      const timeNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+      if (updatedAny) {
+        priceSourceLabel = "Google Finance & Market API • Update " + timeNow;
+        saveLocalState();
+        if (showToastFlag) {
+          showToast("Harga BBCA/IDR & BTC/IDR berhasil diperbarui!", "📈");
+        }
+      } else if (showToastFlag) {
+        showToast("Menggunakan harga terakhir tersimpan", "ℹ️");
+      }
+
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "↻ Harga Google";
+      }
+
+      renderInvestmentReport();
+    }
+
+    function renderInvestmentReport() {
+      const sourceEl = document.getElementById("invest-price-source");
+      if (sourceEl) sourceEl.textContent = priceSourceLabel;
+
+      const supportedAssets = [
+        { code: "BBCA/IDR", name: "Bank Central Asia (IDX:BBCA)", badge: "SAHAM IDX", badgeClass: "bg-blue-100 text-blue-700" },
+        { code: "BTC/IDR", name: "Bitcoin Rupiah (BTC/IDR)", badge: "CRYPTO", badgeClass: "bg-amber-100 text-amber-700" }
+      ];
+
+      const investTxs = transactions.filter(function (t) { return t.type === "Invest"; });
+
+      let grandModal = 0;
+      let grandCurrent = 0;
+
+      const assetsContainer = document.getElementById("investment-assets-container");
+      if (assetsContainer) {
+        assetsContainer.innerHTML = supportedAssets
+          .map(function (asset) {
+            const assetTxs = investTxs.filter(function (t) {
+              return (t.kodeInvest || "").toUpperCase() === asset.code;
+            });
+
+            let totalLot = 0;
+            let totalModal = 0;
+
+            assetTxs.forEach(function (t) {
+              const lot = Number(t.lot) || 0;
+              const avg = Number(t.avgPrice) || 0;
+              const modalTx = lot > 0 && avg > 0 ? lot * avg : Number(t.nominal) || 0;
+              totalLot += lot;
+              totalModal += modalTx;
+            });
+
+            const avgPrice = totalLot > 0 ? totalModal / totalLot : 0;
+            const priceToday = Number(liveMarketPrices[asset.code]) || 0;
+            const currentVal = priceToday > 0 ? priceToday * totalLot : totalModal;
+
+            // Return = (Price Today x Lot Dimiliki) - (Average Price x Lot Dimiliki)
+            const returnVal = totalLot > 0 && priceToday > 0
+              ? (priceToday * totalLot) - (avgPrice * totalLot)
+              : 0;
+            const returnPct = totalModal > 0 && priceToday > 0
+              ? ((returnVal / totalModal) * 100).toFixed(2)
+              : "0.00";
+
+            grandModal += totalModal;
+            grandCurrent += currentVal;
+
+            const isMinus = returnVal < 0;
+            const isPlus = returnVal > 0;
+            const returnColorClass = isMinus
+              ? "text-rose-600"
+              : isPlus
+                ? "text-emerald-600"
+                : "text-slate-700";
+            const returnBadgeClass = isMinus
+              ? "bg-rose-50 text-rose-600 border-rose-200"
+              : isPlus
+                ? "bg-emerald-50 text-emerald-600 border-emerald-200"
+                : "bg-slate-100 text-slate-600 border-slate-200";
+            const returnSign = isMinus ? "-" : isPlus ? "+" : "";
+
+            const formattedLot = Number(totalLot.toFixed(6)).toLocaleString("id-ID");
+
+            return (
+              '<div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3.5">' +
+              '<div class="flex items-start justify-between gap-2">' +
+              '<div>' +
+              '<div class="flex items-center gap-2">' +
+              '<h4 class="text-base font-extrabold text-slate-900">' + asset.code + '</h4>' +
+              '<span class="text-[10px] font-extrabold px-2 py-0.5 rounded-full ' + asset.badgeClass + '">' + asset.badge + '</span>' +
+              '</div>' +
+              '<p class="text-[11px] text-slate-400 mt-0.5">' + asset.name + '</p>' +
+              '</div>' +
+              '<div class="px-2.5 py-1 rounded-xl border text-xs font-extrabold ' + returnBadgeClass + '">' +
+              returnSign + returnPct + '%' +
+              '</div>' +
+              '</div>' +
+
+              '<div class="grid grid-cols-2 gap-2.5 p-3 rounded-2xl bg-slate-50 border border-slate-100 text-xs">' +
+              '<div>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Total Lot Dimiliki</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formattedLot + ' lot</p>' +
+              '</div>' +
+              '<div>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Average Price</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(avgPrice) + '</p>' +
+              '</div>' +
+              '<div>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Price Today (Google)</p>' +
+              '<p class="text-sm font-extrabold text-indigo-600 mt-0.5">' + (priceToday > 0 ? formatRupiah(priceToday) : 'Belum tersedia') + '</p>' +
+              '</div>' +
+              '<div>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Value Saat Ini</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(currentVal) + '</p>' +
+              '</div>' +
+              '</div>' +
+
+              '<div class="flex items-center justify-between pt-1">' +
+              '<div>' +
+              '<p class="text-[10px] font-bold text-slate-400 uppercase">Return (Profit / Loss)</p>' +
+              '<p class="text-[10px] text-slate-400">Modal: ' + formatRupiah(totalModal) + '</p>' +
+              '</div>' +
+              '<p class="text-base font-extrabold ' + returnColorClass + '">' +
+              returnSign + formatRupiah(Math.abs(returnVal)) +
+              '</p>' +
+              '</div>' +
+              '</div>'
+            );
+          })
+          .join("");
+      }
+
+      // Update Summary Portfolio di Kartu Atas Page 3
+      const grandReturn = grandCurrent - grandModal;
+      const sumCurrentEl = document.getElementById("inv-summary-current");
+      const sumModalEl = document.getElementById("inv-summary-modal");
+      const sumReturnEl = document.getElementById("inv-summary-return");
+
+      if (sumCurrentEl) sumCurrentEl.textContent = formatRupiah(grandCurrent);
+      if (sumModalEl) sumModalEl.textContent = formatRupiah(grandModal);
+      if (sumReturnEl) {
+        const isMinus = grandReturn < 0;
+        const isPlus = grandReturn > 0;
+        const sign = isMinus ? "-" : isPlus ? "+" : "";
+        sumReturnEl.textContent = sign + formatRupiah(Math.abs(grandReturn));
+        sumReturnEl.className = isMinus
+          ? "text-sm font-extrabold text-rose-400"
+          : isPlus
+            ? "text-sm font-extrabold text-emerald-400"
+            : "text-sm font-extrabold text-slate-200";
+      }
+
+      // Render Riwayat Pembelian Investasi
+      const invHistEl = document.getElementById("investment-history-list");
+      if (invHistEl) {
+        const sortedInv = investTxs.slice().reverse();
+        if (sortedInv.length === 0) {
+          invHistEl.innerHTML =
+            '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi investasi. Pilih Type "Invest" di tab Input.</p>';
+        } else {
+          invHistEl.innerHTML = sortedInv.map(createTransactionItemHTML).join("");
+        }
+      }
     }
 
     // =========================================================================
