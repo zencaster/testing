@@ -1389,6 +1389,9 @@ function doPost(e) {
     const FALLBACK_SHEET_NAME = "Sheet1";
     const INVEST_SHEET_NAME = "Invest";
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyE5U_RkaYU6AeXpzogGbeRbKo7SFbkdvQiN5dnUXxZWaMUqBTS4LsEskjCO_1ZNmYK/exec";
+    const DEPRECATED_SCRIPT_URLS = [
+      "https://script.google.com/macros/s/AKfycbyewqVq7M8Lf7KPkRbmTMJdbtBjou6c37mxjFUQ4v1miVnrI4jzRcoAZ7aJzPkKirpY/exec"
+    ];
 
     const DEFAULT_EXPENSE_CATEGORIES = [
       "FOOD",
@@ -1607,8 +1610,12 @@ function doPost(e) {
 
     function getScriptUrl() {
       try {
-        const saved = localStorage.getItem("kv_finance_script_url");
-        if (saved && saved.trim()) return saved.trim();
+        const saved = (localStorage.getItem("kv_finance_script_url") || "").trim();
+        if (saved && DEPRECATED_SCRIPT_URLS.indexOf(saved) !== -1) {
+          localStorage.setItem("kv_finance_script_url", DEFAULT_SCRIPT_URL);
+          return DEFAULT_SCRIPT_URL.trim();
+        }
+        if (saved) return saved;
         return DEFAULT_SCRIPT_URL.trim();
       } catch (err) {
         return DEFAULT_SCRIPT_URL.trim();
