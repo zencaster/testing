@@ -2,626 +2,1466 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Suit PvP 1v1 — Multiplayer Lobby</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>KV Finance — Kevin & Vivie</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Google Fonts: Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+
   <style>
-    :root {
-      --bg: #0f172a;
-      --card: #1e293b;
-      --surface: #0f172a;
-      --border: #334155;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --primary: #38bdf8;
-      --success: #22c55e;
-      --danger: #ef4444;
-      --warning: #f59e0b;
+    * {
+      -webkit-tap-highlight-color: transparent;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body {
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 1rem;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #e2e8f0;
     }
-    .container {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 1.75rem;
-      width: 100%;
-      max-width: 480px;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.35);
+    /* Custom scrollbar hidden for mobile app feel */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
     }
-    .hidden { display: none !important; }
-    h1 { font-size: 1.4rem; text-align: center; margin-bottom: 0.25rem; }
-    .subtitle { text-align: center; color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
-    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
-    input {
-      width: 100%;
-      padding: 0.75rem 1rem;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      font-size: 1rem;
-      margin-bottom: 1rem;
-      outline: none;
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
     }
-    input:focus { border-color: var(--primary); }
-    button {
-      width: 100%;
-      padding: 0.75rem 1rem;
-      border: none;
-      border-radius: 10px;
-      font-size: 0.95rem;
-      font-weight: 700;
-      cursor: pointer;
-      transition: transform 0.1s, opacity 0.2s;
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
     }
-    button:active { transform: scale(0.98); }
-    button:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn-primary { background: var(--primary); color: #0f172a; }
-    .btn-secondary { background: #334155; color: var(--text); }
-    .btn-success { background: var(--success); color: #0f172a; }
-    .divider {
-      display: flex;
-      align-items: center;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.8rem;
-      margin: 1.25rem 0;
+    .animate-shake {
+      animation: shake 0.35s ease-in-out;
     }
-    .divider::before, .divider::after {
-      content: '';
-      flex: 1;
-      border-bottom: 1px solid var(--border);
+    @keyframes fadeSlideUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-    .divider:not(:empty)::before { margin-right: .75em; }
-    .divider:not(:empty)::after { margin-left: .75em; }
-    .join-row { display: flex; gap: 0.5rem; }
-    .join-row input { margin-bottom: 0; letter-spacing: 3px; font-weight: 700; text-align: center; }
-    .join-row button { width: auto; white-space: nowrap; padding: 0 1.25rem; }
-
-    /* Waiting Lobby */
-    .room-box {
-      background: var(--surface);
-      border: 1px dashed var(--primary);
-      border-radius: 12px;
-      padding: 1.25rem;
-      text-align: center;
-      margin-bottom: 1.25rem;
+    .animate-fade-up {
+      animation: fadeSlideUp 0.25s ease-out forwards;
     }
-    .room-code {
-      font-size: 2.2rem;
-      font-weight: 800;
-      letter-spacing: 6px;
-      color: var(--primary);
-      margin: 0.5rem 0;
-    }
-    .pulse {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--warning);
-      margin-right: 6px;
-      animation: blink 1.2s infinite;
-    }
-    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-
-    /* Game Arena */
-    .top-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.8rem;
-      color: var(--muted);
-      margin-bottom: 1rem;
-    }
-    .status-pill {
-      background: rgba(34, 197, 94, 0.15);
-      color: var(--success);
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-weight: 600;
-    }
-    .scoreboard {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-      background: var(--surface);
-      border-radius: 12px;
-      padding: 0.85rem;
-      margin-bottom: 1.25rem;
-      text-align: center;
-    }
-    .player-name { font-size: 0.85rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .player-score { font-size: 1.6rem; font-weight: 800; margin-top: 2px; }
-    .vs { font-weight: 800; color: var(--muted); padding: 0 0.75rem; }
-
-    .battle-stage {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-bottom: 1.25rem;
-    }
-    .hand-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.25rem 0.75rem;
-      text-align: center;
-    }
-    .hand-emoji { font-size: 3rem; margin: 0.5rem 0; }
-    .hand-label { font-size: 0.8rem; color: var(--muted); }
-
-    .banner {
-      text-align: center;
-      padding: 0.75rem;
-      border-radius: 10px;
-      background: rgba(56, 189, 248, 0.12);
-      color: var(--primary);
-      font-weight: 600;
-      font-size: 0.95rem;
-      margin-bottom: 1.25rem;
-    }
-    .banner.win { background: rgba(34, 197, 94, 0.15); color: var(--success); }
-    .banner.lose { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
-    .banner.draw { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
-
-    .choices {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0.65rem;
-    }
-    .choice-btn {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 0.9rem 0.5rem;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-    }
-    .choice-btn:hover:not(:disabled) { border-color: var(--primary); background: #162238; }
-    .choice-btn.selected { border-color: var(--primary); background: rgba(56, 189, 248, 0.18); }
-    .choice-btn span.icon { font-size: 1.8rem; }
-    .choice-btn span.text { font-size: 0.8rem; }
-    .error-msg { color: var(--danger); font-size: 0.85rem; text-align: center; margin-top: 0.75rem; line-height: 1.4; }
-    .version-tag { text-align: center; font-size: 0.72rem; color: #475569; margin-top: 1.25rem; }
   </style>
 </head>
-<body>
-  <div class="container">
-    <!-- SCREEN 1: MENU LOBBY -->
-    <div id="screen-menu">
-      <h1>✊✌️✋ Suit PvP 1v1</h1>
-      <p class="subtitle">Buat lobby sebagai Host atau masuk sebagai Guest</p>
+<body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
-      <label for="player-name">Nama Kamu</label>
-      <input type="text" id="player-name" placeholder="Masukkan nama..." maxlength="15" />
+  <!-- MOBILE APP SHELL (Max Width 430px) -->
+  <div id="app-shell" class="w-full max-w-[430px] min-h-screen bg-slate-50 shadow-2xl relative flex flex-col overflow-x-hidden">
 
-      <button type="button" id="btn-create" class="btn-primary">Buat Lobby Baru (Host)</button>
-
-      <div class="divider">ATAU GABUNG SEBAGAI GUEST</div>
-
-      <label for="join-code">Masukkan 4 Digit Kode Lobby</label>
-      <div class="join-row">
-        <input type="text" id="join-code" placeholder="1234" maxlength="4" inputmode="numeric" />
-        <button type="button" id="btn-join" class="btn-secondary">Join</button>
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-[390px] pointer-events-none opacity-0 transition-all duration-300 -translate-y-3">
+      <div id="toast-box" class="px-4 py-3 rounded-2xl shadow-lg flex items-center gap-3 text-sm font-semibold text-white bg-slate-900">
+        <span id="toast-icon">✅</span>
+        <span id="toast-msg" class="flex-1">Berhasil disimpan</span>
       </div>
-      <p id="menu-error" class="error-msg hidden"></p>
     </div>
 
-    <!-- SCREEN 2: WAITING ROOM (HOST) -->
-    <div id="screen-wait" class="hidden">
-      <h1>Lobby Dibuat</h1>
-      <p class="subtitle">Bagikan kode ini ke temanmu untuk masuk sebagai Guest</p>
-
-      <div class="room-box">
-        <div style="font-size: 0.8rem; color: var(--muted);">KODE LOBBY</div>
-        <div id="display-code" class="room-code">----</div>
-        <button type="button" id="btn-copy" class="btn-secondary" style="width: auto; padding: 0.45rem 1rem; font-size: 0.8rem;">
-          Salin Kode
-        </button>
+    <!-- ==================== LOGIN VIEW ==================== -->
+    <div id="login-view" class="flex-1 flex flex-col justify-between p-6 bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-white">
+      <div class="pt-10">
+        <div class="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center mb-6 shadow-inner">
+          <svg class="w-7 h-7 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <span class="inline-block text-xs font-bold tracking-wider uppercase text-indigo-300 bg-indigo-500/20 px-3 py-1 rounded-full mb-3">
+          Household Finance
+        </span>
+        <h1 class="text-3xl font-extrabold tracking-tight leading-tight">
+          KV Finance
+        </h1>
+        <p class="text-slate-300 text-sm mt-2 leading-relaxed">
+          Catatan pengeluaran & pemasukan harian khusus untuk <span class="text-white font-semibold">Kevin</span> & <span class="text-white font-semibold">Vivie</span>.
+        </p>
       </div>
 
-      <p style="text-align: center; font-size: 0.9rem; color: var(--muted); margin-bottom: 1.25rem;">
-        <span class="pulse"></span> Menunggu Guest bergabung...
-      </p>
-      <button type="button" id="btn-cancel-wait" class="btn-secondary">Batal</button>
-    </div>
-
-    <!-- SCREEN 3: ARENA PVP -->
-    <div id="screen-game" class="hidden">
-      <div class="top-bar">
-        <span>Room: <strong id="game-room-code">----</strong> (Ronde <span id="round-num">1</span>)</span>
-        <span id="conn-badge" class="status-pill">● Terhubung</span>
-      </div>
-
-      <div class="scoreboard">
+      <form id="login-form" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-auto">
         <div>
-          <div id="label-me" class="player-name">Kamu</div>
-          <div id="score-me" class="player-score">0</div>
+          <h2 class="text-lg font-bold text-slate-900">Masuk ke Akun</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Silakan masukkan username dan password Anda</p>
         </div>
-        <div class="vs">VS</div>
+
+        <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-medium px-3.5 py-2.5 rounded-xl">
+          Username atau password salah. Gunakan akun Kevin atau Vivie.
+        </div>
+
         <div>
-          <div id="label-opp" class="player-name">Lawan</div>
-          <div id="score-opp" class="player-score">0</div>
+          <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Username</label>
+          <input
+            type="text"
+            id="login-username"
+            placeholder="Kevin atau Vivie"
+            autocomplete="username"
+            required
+            class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+          />
         </div>
-      </div>
 
-      <div class="battle-stage">
-        <div class="hand-card">
-          <div class="hand-label">Pilihan Kamu</div>
-          <div id="my-hand" class="hand-emoji">❔</div>
-          <div id="my-hand-text" class="hand-label">Belum memilih</div>
+        <div>
+          <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">Password</label>
+          <div class="relative">
+            <input
+              type="password"
+              id="login-password"
+              placeholder="••••••••"
+              autocomplete="current-password"
+              required
+              class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition pr-12"
+            />
+            <button type="button" id="toggle-pwd" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 text-xs font-semibold">
+              Lihat
+            </button>
+          </div>
         </div>
-        <div class="hand-card">
-          <div class="hand-label">Pilihan Lawan</div>
-          <div id="opp-hand" class="hand-emoji">❔</div>
-          <div id="opp-hand-text" class="hand-label">Menunggu...</div>
-        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+        >
+          Masuk Sekarang
+        </button>
+      </form>
+
+      <div class="text-center pb-4">
+        <p class="text-[11px] text-slate-400">Terhubung ke Google Sheets • Mobile View</p>
       </div>
-
-      <div id="game-banner" class="banner">Pilih Batu, Gunting, atau Kertas!</div>
-
-      <div id="choice-buttons" class="choices">
-        <button type="button" class="choice-btn" data-choice="batu">
-          <span class="icon">✊</span>
-          <span class="text">Batu</span>
-        </button>
-        <button type="button" class="choice-btn" data-choice="gunting">
-          <span class="icon">✌️</span>
-          <span class="text">Gunting</span>
-        </button>
-        <button type="button" class="choice-btn" data-choice="kertas">
-          <span class="icon">✋</span>
-          <span class="text">Kertas</span>
-        </button>
-      </div>
-
-      <button type="button" id="btn-next-round" class="btn-success hidden" style="margin-top: 1rem;">
-        Ronde Berikutnya
-      </button>
-      <button type="button" id="btn-leave" class="btn-secondary" style="margin-top: 0.65rem; font-size: 0.85rem;">
-        Keluar Lobby
-      </button>
     </div>
 
-    <div class="version-tag">Versi 4.0 • Firebase Realtime</div>
+    <!-- ==================== MAIN APP VIEW ==================== -->
+    <div id="main-view" class="hidden flex-1 flex flex-col pb-24">
+
+      <!-- TOP HEADER -->
+      <header class="sticky top-0 z-30 bg-slate-900 text-white px-5 pt-4 pb-4 rounded-b-3xl shadow-md">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div id="user-avatar" class="w-10 h-10 rounded-2xl bg-indigo-500 flex items-center justify-center font-extrabold text-base shadow-inner">
+              K
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h1 class="text-base font-bold leading-none">Halo, <span id="header-username">Kevin</span>!</h1>
+                <span id="sync-badge" class="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Mode Lokal
+                </span>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1" id="header-date">Jumat, 20 Nov 2026</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              onclick="openSettingsModal()"
+              title="Pengaturan Google Sheet"
+              class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onclick="logout()"
+              title="Keluar"
+              class="p-2.5 rounded-xl bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white transition"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- ==================== TAB 1: INPUT TRANSAKSI ==================== -->
+      <section id="tab-input" class="p-5 space-y-5 animate-fade-up">
+
+        <!-- Google Sheet Connection Banner (shown if URL not set yet) -->
+        <div id="setup-alert" class="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5">
+            <span class="text-lg">📊</span>
+            <div>
+              <p class="text-xs font-bold text-indigo-950">Hubungkan Google Sheet</p>
+              <p class="text-[11px] text-indigo-700">Tempel URL Apps Script agar otomatis masuk ke baris bawah Sheet.</p>
+            </div>
+          </div>
+          <button type="button" onclick="openSettingsModal()" class="shrink-0 px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm">
+            Setup
+          </button>
+        </div>
+
+        <form id="transaction-form" class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-5">
+
+          <!-- 1. TYPE (Radio Button: Default Pengeluaran) -->
+          <div>
+            <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+              1. Type Transaksi
+            </label>
+            <div class="grid grid-cols-2 gap-2.5 p-1.5 bg-slate-100 rounded-2xl">
+              <label class="cursor-pointer">
+                <input type="radio" name="tx-type" value="Pengeluaran" checked class="peer sr-only" onchange="handleTypeChange()" />
+                <div class="py-2.5 px-3 rounded-xl text-center text-sm font-bold text-slate-500 peer-checked:bg-rose-500 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1.5">
+                  <span>💸</span> Pengeluaran
+                </div>
+              </label>
+
+              <label class="cursor-pointer">
+                <input type="radio" name="tx-type" value="Pemasukan" class="peer sr-only" onchange="handleTypeChange()" />
+                <div class="py-2.5 px-3 rounded-xl text-center text-sm font-bold text-slate-500 peer-checked:bg-emerald-600 peer-checked:text-white peer-checked:shadow-md transition flex items-center justify-center gap-1.5">
+                  <span>💰</span> Pemasukan
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- NOMINAL (Rp) -->
+          <div>
+            <label for="tx-nominal" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+              Nominal (Rp)
+            </label>
+            <div class="relative">
+              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-base font-extrabold text-slate-400">Rp</span>
+              <input
+                type="text"
+                inputmode="numeric"
+                id="tx-nominal"
+                placeholder="0"
+                required
+                oninput="formatNominalInput(this)"
+                class="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xl font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+              />
+            </div>
+            <!-- Quick amount pills -->
+            <div class="flex gap-2 mt-2 overflow-x-auto no-scrollbar">
+              <button type="button" onclick="addQuickNominal(25000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+25rb</button>
+              <button type="button" onclick="addQuickNominal(50000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+50rb</button>
+              <button type="button" onclick="addQuickNominal(100000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+100rb</button>
+              <button type="button" onclick="addQuickNominal(500000)" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-600 shrink-0">+500rb</button>
+              <button type="button" onclick="clearNominal()" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-600 shrink-0">Reset</button>
+            </div>
+          </div>
+
+          <!-- 2. KETERANGAN (Free Text) -->
+          <div>
+            <label for="tx-keterangan" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+              2. Keterangan
+            </label>
+            <input
+              type="text"
+              id="tx-keterangan"
+              placeholder="Contoh: Makan siang, Belanja sayur, Gaji..."
+              required
+              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+            />
+          </div>
+
+          <!-- 3. KATEGORI (Pilih List atau Tambah Baru) -->
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label for="tx-kategori" class="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                3. Kategori
+              </label>
+              <button
+                type="button"
+                id="btn-toggle-new-cat"
+                onclick="toggleNewCategoryBox()"
+                class="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+              >
+                <span>+ Tambah Kategori Baru</span>
+              </button>
+            </div>
+
+            <!-- Select existing category -->
+            <select
+              id="tx-kategori"
+              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+            ></select>
+
+            <!-- Quick category chips -->
+            <div id="category-chips" class="flex flex-wrap gap-1.5 mt-2.5"></div>
+
+            <!-- Add New Category Inline Box -->
+            <div id="new-category-box" class="hidden mt-3 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+              <label class="block text-[11px] font-bold text-indigo-900">Nama Kategori Baru</label>
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  id="new-category-input"
+                  placeholder="Misal: CICILAN, INVESTASI..."
+                  class="flex-1 px-3 py-2 rounded-xl bg-white border border-indigo-200 text-xs font-bold uppercase text-slate-800 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onclick="confirmAddNewCategory()"
+                  class="px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition"
+                >
+                  Pakai
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- TANGGAL TRANSAKSI -->
+          <div>
+            <label for="tx-tanggal" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+              Tanggal Transaksi
+            </label>
+            <input
+              type="date"
+              id="tx-tanggal"
+              required
+              class="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500 transition"
+            />
+          </div>
+
+          <!-- SUBMIT BUTTON -->
+          <button
+            type="submit"
+            id="btn-submit-tx"
+            class="w-full py-4 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span id="submit-btn-text">Simpan Pengeluaran</span>
+          </button>
+        </form>
+
+        <!-- MINI RECENT PREVIEW -->
+        <div class="bg-white rounded-3xl p-4 shadow-sm border border-slate-100">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Transaksi Terakhir</h3>
+            <button type="button" onclick="switchTab('history')" class="text-xs font-bold text-indigo-600">Lihat Semua →</button>
+          </div>
+          <div id="recent-mini-list" class="space-y-2.5"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: DASHBOARD REPORT ==================== -->
+      <section id="tab-dashboard" class="hidden p-5 space-y-5 animate-fade-up">
+
+        <!-- Filter & Refresh Bar -->
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <h2 class="text-lg font-extrabold text-slate-900">Laporan Keuangan</h2>
+            <p class="text-xs text-slate-500">Ringkasan Pengeluaran & Pemasukan</p>
+          </div>
+          <button
+            type="button"
+            onclick="syncFromGoogleSheet(true)"
+            id="btn-refresh-dash"
+            class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm flex items-center gap-1.5"
+          >
+            <svg class="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Sync
+          </button>
+        </div>
+
+        <!-- Month Filter for Summary & Category Report -->
+        <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between gap-3">
+          <span class="text-xs font-bold text-slate-500 pl-1">Periode Filter:</span>
+          <select
+            id="dash-month-filter"
+            onchange="renderDashboard()"
+            class="px-3 py-1.5 rounded-xl bg-slate-100 text-xs font-bold text-slate-800 focus:outline-none"
+          >
+            <option value="ALL">Semua Bulan</option>
+          </select>
+        </div>
+
+        <!-- KPI SUMMARY CARDS -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-emerald-50 border border-emerald-100 rounded-3xl p-4">
+            <div class="flex items-center gap-1.5 text-emerald-700 text-xs font-bold">
+              <span>💰</span> Pemasukan
+            </div>
+            <p id="kpi-income" class="text-base font-extrabold text-emerald-900 mt-1.5 truncate">Rp 0</p>
+          </div>
+
+          <div class="bg-rose-50 border border-rose-100 rounded-3xl p-4">
+            <div class="flex items-center gap-1.5 text-rose-700 text-xs font-bold">
+              <span>💸</span> Pengeluaran
+            </div>
+            <p id="kpi-expense" class="text-base font-extrabold text-rose-900 mt-1.5 truncate">Rp 0</p>
+          </div>
+
+          <div class="col-span-2 bg-slate-900 text-white rounded-3xl p-4 flex items-center justify-between">
+            <div>
+              <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Selisih / Cashflow Bersih</p>
+              <p id="kpi-balance" class="text-xl font-extrabold mt-0.5">Rp 0</p>
+            </div>
+            <span id="kpi-status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300">
+              Seimbang
+            </span>
+          </div>
+        </div>
+
+        <!-- REPORT 1: BULANAN PENGELUARAN VS PEMASUKAN -->
+        <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+          <div>
+            <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+              Report 1
+            </span>
+            <h3 class="text-base font-extrabold text-slate-900 mt-2">Bulanan: Pengeluaran vs Pemasukan</h3>
+            <p class="text-xs text-slate-500">Perbandingan arus kas masuk dan keluar tiap bulan</p>
+          </div>
+
+          <div class="relative h-56 w-full">
+            <canvas id="monthlyChart"></canvas>
+          </div>
+
+          <!-- Monthly Breakdown Table -->
+          <div id="monthly-breakdown-list" class="divide-y divide-slate-100 pt-2"></div>
+        </div>
+
+        <!-- REPORT 2: BERDASARKAN KATEGORI -->
+        <div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-4">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <span class="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+                Report 2
+              </span>
+              <h3 class="text-base font-extrabold text-slate-900 mt-2">Berdasarkan Kategori</h3>
+            </div>
+
+            <!-- Toggle Pengeluaran / Pemasukan for Category Report -->
+            <div class="flex bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
+              <button
+                type="button"
+                id="cat-filter-expense"
+                onclick="setCategoryReportType('Pengeluaran')"
+                class="px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition"
+              >
+                Keluar
+              </button>
+              <button
+                type="button"
+                id="cat-filter-income"
+                onclick="setCategoryReportType('Pemasukan')"
+                class="px-2.5 py-1 rounded-lg text-slate-500 transition"
+              >
+                Masuk
+              </button>
+            </div>
+          </div>
+
+          <div class="relative h-52 w-full flex items-center justify-center">
+            <canvas id="categoryChart"></canvas>
+          </div>
+
+          <!-- Category Ranking List -->
+          <div id="category-breakdown-list" class="space-y-3 pt-2"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 3: RIWAYAT TRANSAKSI ==================== -->
+      <section id="tab-history" class="hidden p-5 space-y-4 animate-fade-up">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-extrabold text-slate-900">Riwayat Transaksi</h2>
+            <p class="text-xs text-slate-500" id="history-count-label">0 transaksi tercatat</p>
+          </div>
+          <a
+            href="https://docs.google.com/spreadsheets/d/18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI/edit?gid=0#gid=0"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-sm hover:bg-emerald-700 transition"
+          >
+            Buka Sheet ↗
+          </a>
+        </div>
+
+        <!-- Filter User Pills -->
+        <div class="flex gap-2 overflow-x-auto no-scrollbar">
+          <button type="button" onclick="setHistoryUserFilter('ALL')" id="hist-user-ALL" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white">Semua</button>
+          <button type="button" onclick="setHistoryUserFilter('Kevin')" id="hist-user-Kevin" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200">Kevin</button>
+          <button type="button" onclick="setHistoryUserFilter('Vivie')" id="hist-user-Vivie" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200">Vivie</button>
+        </div>
+
+        <div id="full-history-list" class="space-y-2.5"></div>
+      </section>
+
+      <!-- BOTTOM NAVIGATION BAR -->
+      <nav class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] bg-white/95 backdrop-blur-md border-t border-slate-200 px-6 py-2.5 z-40 flex items-center justify-around">
+        <button
+          type="button"
+          onclick="switchTab('input')"
+          id="nav-input"
+          class="flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          <span>Input</span>
+        </button>
+
+        <button
+          type="button"
+          onclick="switchTab('dashboard')"
+          id="nav-dashboard"
+          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          <span>Dashboard</span>
+        </button>
+
+        <button
+          type="button"
+          onclick="switchTab('history')"
+          id="nav-history"
+          class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>Riwayat</span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- ==================== SETTINGS MODAL (GOOGLE SHEET SYNC) ==================== -->
+    <div id="settings-modal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-4">
+      <div class="w-full max-w-[400px] bg-white rounded-3xl p-5 shadow-2xl space-y-4 animate-fade-up max-h-[88vh] overflow-y-auto">
+        <div class="flex items-center justify-between">
+          <h3 class="text-base font-extrabold text-slate-900">Koneksi Google Sheet</h3>
+          <button type="button" onclick="closeSettingsModal()" class="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-800">✕</button>
+        </div>
+
+        <p class="text-xs text-slate-600 leading-relaxed">
+          Agar setiap transaksi otomatis masuk ke baris paling bawah pada Google Sheet Anda, tempelkan <strong>URL Web App Google Apps Script</strong> di bawah ini:
+        </p>
+
+        <div>
+          <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Google Apps Script Web App URL</label>
+          <input
+            type="url"
+            id="script-url-input"
+            placeholder="https://script.google.com/macros/s/.../exec"
+            class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+
+        <div class="flex gap-2">
+          <button
+            type="button"
+            onclick="saveScriptUrl()"
+            class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition"
+          >
+            Simpan & Sinkronkan
+          </button>
+          <a
+            href="https://docs.google.com/spreadsheets/d/18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI/edit?gid=0#gid=0"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="px-3.5 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 transition"
+          >
+            Buka Sheet
+          </a>
+        </div>
+
+        <div class="pt-2 border-t border-slate-100 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Salin ke Extensions &gt; Apps Script)</span>
+            <button type="button" onclick="copyAppsScriptCode()" class="text-[11px] font-bold text-indigo-600 hover:underline">
+              Salin Kode
+            </button>
+          </div>
+          <pre id="apps-script-preview" class="p-3 rounded-xl bg-slate-900 text-slate-200 text-[10px] overflow-x-auto leading-relaxed">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
+
+function getTargetSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheets()[0];
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Tanggal','Type','Nominal','Keterangan','Kategori','User','Timestamp']);
+  }
+  return sheet;
+}
+
+function doGet() {
+  const sheet = getTargetSheet();
+  const data = sheet.getDataRange().getValues();
+  const rows = [];
+  for (let i = 1; i &lt; data.length; i++) {
+    if (!data[i][0] &amp;&amp; !data[i][2]) continue;
+    let d = data[i][0];
+    if (d instanceof Date) d = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    rows.push({
+      tanggal: String(d),
+      type: String(data[i][1] || 'Pengeluaran'),
+      nominal: Number(data[i][2]) || 0,
+      keterangan: String(data[i][3] || ''),
+      kategori: String(data[i][4] || 'OTHER'),
+      user: String(data[i][5] || '')
+    });
+  }
+  return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: rows })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  const sheet = getTargetSheet();
+  const p = JSON.parse(e.postData.contents);
+  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  sheet.appendRow([p.tanggal, p.type, Number(p.nominal), p.keterangan, p.kategori, p.user, ts]);
+  return ContentService.createTextOutput(JSON.stringify({ status: 'success' })).setMimeType(ContentService.MimeType.JSON);
+}</pre>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, set, get, update, onValue, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+  <!-- ==================== JAVASCRIPT APPLICATION LOGIC ==================== -->
+  <script>
+    // =========================================================================
+    // 1. KONFIGURASI DEFAULT (Isi URL Web App Apps Script di sini sebelum push GitHub)
+    // =========================================================================
+    const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwU7x5YUQFCN4Uum8KNg4q0D8gosHchA8l5nNGhYk9W_FpeLQMfdQV0UiIqStvOPBf7/exec"; // Contoh: "https://script.google.com/macros/s/AKfycb.../exec"
+
+    // Kredensial Login Resmi
+    const VALID_USERS = {
+      Kevin: "Kevin",
+      Vivie: "Vivie",
+    };
+
+    // Kategori Bawaan (Otomatis digabung dengan kategori dari Google Sheet)
+    const DEFAULT_EXPENSE_CATEGORIES = [
+      "FOOD",
+      "GROCERIES",
+      "TRANSPORT",
+      "BILLS",
+      "SHOPPING",
+      "ENTERTAINMENT",
+      "HEALTH",
+      "HOUSEHOLD",
+      "OTHER",
+    ];
+
+    const DEFAULT_INCOME_CATEGORIES = [
+      "GAJI",
+      "BONUS",
+      "BISNIS",
+      "INVESTASI",
+      "OTHER",
+    ];
+
+    // State Aplikasi
+    let currentUser = null;
+    let transactions = [];
+    let customCategories = [];
+    let categoryReportType = "Pengeluaran";
+    let historyUserFilter = "ALL";
+    let monthlyChartInstance = null;
+    let categoryChartInstance = null;
 
     // =========================================================================
-    // TEMPEL URL FIREBASE REALTIME DATABASE KAMU DI BAWAH INI:
-    // Contoh: "https://suit-pvp-abcde-default-rtdb.asia-southeast1.firebasedatabase.app"
-    const FIREBASE_DB_URL = "https://zencaster-8a7a0-default-rtdb.asia-southeast1.firebasedatabase.app/";
+    // 2. INISIALISASI & AUTENTIKASI
     // =========================================================================
+    document.addEventListener("DOMContentLoaded", () => {
+      // Set tanggal default hari ini
+      const todayStr = new Date().toISOString().split("T")[0];
+      document.getElementById("tx-tanggal").value = todayStr;
 
-    const EMOJI = { batu: '✊', gunting: '✌️', kertas: '✋' };
-    const LABEL = { batu: 'Batu', gunting: 'Gunting', kertas: 'Kertas' };
+      // Format header date
+      const options = { weekday: "long", day: "numeric", month: "short", year: "numeric" };
+      document.getElementById("header-date").textContent = new Date().toLocaleDateString("id-ID", options);
 
-    let db = null;
-    if (FIREBASE_DB_URL.startsWith("https://")) {
-      const app = initializeApp({ databaseURL: FIREBASE_DB_URL });
-      db = getDatabase(app);
-    }
+      // Load saved custom categories & local transactions
+      loadLocalState();
 
-    let unsubscribe = null;
-    let roomRef = null;
-    let isHost = false;
-    let roomCode = '';
-    let myName = '';
-    let inArena = false;
-    let currentRound = 1;
-    let countedRound = 0;
-    let myScore = 0;
-    let oppScore = 0;
-
-    const screenMenu = document.getElementById('screen-menu');
-    const screenWait = document.getElementById('screen-wait');
-    const screenGame = document.getElementById('screen-game');
-    const menuError = document.getElementById('menu-error');
-    const btnCreate = document.getElementById('btn-create');
-    const btnJoin = document.getElementById('btn-join');
-
-    function showScreen(screen) {
-      [screenMenu, screenWait, screenGame].forEach(s => s.classList.add('hidden'));
-      screen.classList.remove('hidden');
-    }
-
-    function showError(msg) {
-      menuError.textContent = msg;
-      menuError.classList.remove('hidden');
-    }
-
-    function clearError() {
-      menuError.classList.add('hidden');
-    }
-
-    function resetButtons() {
-      btnCreate.disabled = false;
-      btnCreate.textContent = 'Buat Lobby Baru (Host)';
-      btnJoin.disabled = false;
-      btnJoin.textContent = 'Join';
-    }
-
-    async function leaveRoom(deleteData = true) {
-      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-      if (deleteData && roomRef) {
-        try { await remove(roomRef); } catch {}
+      // Check saved user session
+      const savedUser = localStorage.getItem("kv_finance_user");
+      if (savedUser && VALID_USERS[savedUser]) {
+        loginSuccess(savedUser);
       }
-      roomRef = null;
-      inArena = false;
-      currentRound = 1;
-      countedRound = 0;
-      myScore = 0;
-      oppScore = 0;
-      resetButtons();
-    }
 
-    function checkConfig() {
-      if (!db) {
-        showError('Konfigurasi belum diisi: ganti FIREBASE_DB_URL di file index.html dengan URL Realtime Database Firebase kamu.');
-        return false;
-      }
-      return true;
-    }
+      // Toggle password visibility
+      document.getElementById("toggle-pwd").addEventListener("click", () => {
+        const pwdInput = document.getElementById("login-password");
+        const btn = document.getElementById("toggle-pwd");
+        if (pwdInput.type === "password") {
+          pwdInput.type = "text";
+          btn.textContent = "Sembunyi";
+        } else {
+          pwdInput.type = "password";
+          btn.textContent = "Lihat";
+        }
+      });
 
-    // 1. BUAT LOBBY (HOST)
-    btnCreate.addEventListener('click', async () => {
-      clearError();
-      if (!checkConfig()) return;
+      // Handle Login Submit
+      document.getElementById("login-form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const usernameInput = document.getElementById("login-username").value.trim();
+        const passwordInput = document.getElementById("login-password").value;
+        const errorBox = document.getElementById("login-error");
 
-      isHost = true;
-      myName = document.getElementById('player-name').value.trim() || 'Host';
-      roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+        if (VALID_USERS[usernameInput] && VALID_USERS[usernameInput] === passwordInput) {
+          errorBox.classList.add("hidden");
+          localStorage.setItem("kv_finance_user", usernameInput);
+          loginSuccess(usernameInput);
+        } else {
+          errorBox.classList.remove("hidden");
+          const form = document.getElementById("login-form");
+          form.classList.remove("animate-shake");
+          void form.offsetWidth;
+          form.classList.add("animate-shake");
+        }
+      });
 
-      btnCreate.disabled = true;
-      btnCreate.textContent = 'Membuat Lobby...';
-      btnJoin.disabled = true;
-
-      try {
-        roomRef = ref(db, 'rooms/' + roomCode);
-        await set(roomRef, {
-          status: 'waiting',
-          hostName: myName,
-          guestName: '',
-          round: 1,
-          hostChoice: '',
-          guestChoice: '',
-          createdAt: Date.now()
-        });
-        onDisconnect(roomRef).remove();
-
-        document.getElementById('display-code').textContent = roomCode;
-        resetButtons();
-        showScreen(screenWait);
-        listenRoom();
-      } catch (err) {
-        await leaveRoom(false);
-        showError('Gagal terhubung ke Firebase: ' + err.message);
-      }
+      // Handle Transaction Submit
+      document.getElementById("transaction-form").addEventListener("submit", handleTransactionSubmit);
     });
 
-    // 2. GABUNG LOBBY (GUEST)
-    btnJoin.addEventListener('click', async () => {
-      clearError();
-      if (!checkConfig()) return;
+    function getScriptUrl() {
+      return localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL;
+    }
 
-      const code = document.getElementById('join-code').value.trim();
-      if (code.length !== 4) {
-        showError('Masukkan 4 digit kode lobby yang valid.');
+    function loadLocalState() {
+      try {
+        const savedTx = JSON.parse(localStorage.getItem("kv_finance_transactions") || "[]");
+        if (Array.isArray(savedTx)) transactions = savedTx;
+      } catch (e) {
+        transactions = [];
+      }
+
+      try {
+        const savedCats = JSON.parse(localStorage.getItem("kv_finance_categories") || "[]");
+        if (Array.isArray(savedCats)) customCategories = savedCats;
+      } catch (e) {
+        customCategories = [];
+      }
+    }
+
+    function saveLocalState() {
+      localStorage.setItem("kv_finance_transactions", JSON.stringify(transactions));
+      localStorage.setItem("kv_finance_categories", JSON.stringify(customCategories));
+    }
+
+    function loginSuccess(username) {
+      currentUser = username;
+      document.getElementById("header-username").textContent = username;
+      const avatar = document.getElementById("user-avatar");
+      avatar.textContent = username.charAt(0).toUpperCase();
+      avatar.className =
+        username === "Kevin"
+          ? "w-10 h-10 rounded-2xl bg-indigo-500 flex items-center justify-center font-extrabold text-base shadow-inner"
+          : "w-10 h-10 rounded-2xl bg-pink-500 flex items-center justify-center font-extrabold text-base shadow-inner";
+
+      document.getElementById("login-view").classList.add("hidden");
+      document.getElementById("main-view").classList.remove("hidden");
+
+      updateConnectionUI();
+      refreshCategoryDropdown();
+      renderRecentMiniList();
+      populateMonthFilter();
+
+      if (getScriptUrl()) {
+        syncFromGoogleSheet(false);
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem("kv_finance_user");
+      currentUser = null;
+      document.getElementById("login-password").value = "";
+      document.getElementById("main-view").classList.add("hidden");
+      document.getElementById("login-view").classList.remove("hidden");
+    }
+
+    // =========================================================================
+    // 3. KONEKSI & SINKRONISASI GOOGLE SHEET
+    // =========================================================================
+    function updateConnectionUI() {
+      const url = getScriptUrl();
+      const badge = document.getElementById("sync-badge");
+      const setupAlert = document.getElementById("setup-alert");
+
+      if (url) {
+        badge.className =
+          "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300";
+        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Google Sheet Aktif';
+        setupAlert.classList.add("hidden");
+      } else {
+        badge.className =
+          "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300";
+        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Belum Sync Sheet';
+        setupAlert.classList.remove("hidden");
+      }
+    }
+
+    function openSettingsModal() {
+      document.getElementById("script-url-input").value = getScriptUrl();
+      document.getElementById("settings-modal").classList.remove("hidden");
+    }
+
+    function closeSettingsModal() {
+      document.getElementById("settings-modal").classList.add("hidden");
+    }
+
+    function saveScriptUrl() {
+      const val = document.getElementById("script-url-input").value.trim();
+      localStorage.setItem("kv_finance_script_url", val);
+      updateConnectionUI();
+      closeSettingsModal();
+      if (val) {
+        syncFromGoogleSheet(true);
+      } else {
+        showToast("URL dihapus, berjalan dalam mode lokal", "ℹ️");
+      }
+    }
+
+    function copyAppsScriptCode() {
+      const code = document.getElementById("apps-script-preview").textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        showToast("Kode Apps Script berhasil disalin!", "📋");
+      });
+    }
+
+    async function syncFromGoogleSheet(showNotification = true) {
+      const url = getScriptUrl();
+      if (!url) return;
+
+      const btn = document.getElementById("btn-refresh-dash");
+      if (btn) btn.classList.add("opacity-50", "pointer-events-none");
+
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.status === "success" && Array.isArray(json.data)) {
+          transactions = json.data;
+          // Extract unique categories from Google Sheet
+          json.data.forEach((row) => {
+            if (row.kategori && !customCategories.includes(row.kategori.toUpperCase())) {
+              customCategories.push(row.kategori.toUpperCase());
+            }
+          });
+          saveLocalState();
+          refreshCategoryDropdown();
+          populateMonthFilter();
+          renderRecentMiniList();
+          renderDashboard();
+          renderFullHistory();
+          if (showNotification) showToast("Data berhasil disinkronkan dari Sheet!", "✅");
+        }
+      } catch (err) {
+        if (showNotification) showToast("Gagal mengambil data dari Google Sheet", "⚠️");
+      } finally {
+        if (btn) btn.classList.remove("opacity-50", "pointer-events-none");
+      }
+    }
+
+    // =========================================================================
+    // 4. FORM INPUT TRANSAKSI & MANAJEMEN KATEGORI
+    // =========================================================================
+    function getSelectedType() {
+      const checked = document.querySelector('input[name="tx-type"]:checked');
+      return checked ? checked.value : "Pengeluaran";
+    }
+
+    function handleTypeChange() {
+      const type = getSelectedType();
+      const submitBtn = document.getElementById("btn-submit-tx");
+      const btnText = document.getElementById("submit-btn-text");
+
+      if (type === "Pengeluaran") {
+        submitBtn.className =
+          "w-full py-4 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-2 cursor-pointer";
+        btnText.textContent = "Simpan Pengeluaran";
+      } else {
+        submitBtn.className =
+          "w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2 cursor-pointer";
+        btnText.textContent = "Simpan Pemasukan";
+      }
+      refreshCategoryDropdown();
+    }
+
+    function getAllAvailableCategories() {
+      const type = getSelectedType();
+      const base = type === "Pengeluaran" ? DEFAULT_EXPENSE_CATEGORIES : DEFAULT_INCOME_CATEGORIES;
+      const fromTx = transactions
+        .filter((t) => t.type === type && t.kategori)
+        .map((t) => t.kategori.toUpperCase());
+      const merged = Array.from(new Set([...base, ...customCategories, ...fromTx]));
+      return merged;
+    }
+
+    function refreshCategoryDropdown(selectedCat = null) {
+      const select = document.getElementById("tx-kategori");
+      const chipsContainer = document.getElementById("category-chips");
+      const categories = getAllAvailableCategories();
+
+      const previousValue = selectedCat || select.value;
+      select.innerHTML = "";
+      chipsContainer.innerHTML = "";
+
+      categories.forEach((cat) => {
+        const opt = document.createElement("option");
+        opt.value = cat;
+        opt.textContent = cat;
+        select.appendChild(opt);
+
+        // Render top 6 quick chips
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.textContent = cat;
+        chip.className =
+          "px-2.5 py-1 rounded-lg text-[11px] font-bold border transition " +
+          (cat === previousValue
+            ? "bg-indigo-600 text-white border-indigo-600"
+            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100");
+        chip.onclick = () => {
+          select.value = cat;
+          refreshCategoryDropdown(cat);
+        };
+        chipsContainer.appendChild(chip);
+      });
+
+      if (previousValue && categories.includes(previousValue)) {
+        select.value = previousValue;
+      } else if (categories.length > 0) {
+        select.value = categories[0];
+      }
+    }
+
+    function toggleNewCategoryBox() {
+      const box = document.getElementById("new-category-box");
+      box.classList.toggle("hidden");
+      if (!box.classList.contains("hidden")) {
+        document.getElementById("new-category-input").focus();
+      }
+    }
+
+    function confirmAddNewCategory() {
+      const input = document.getElementById("new-category-input");
+      const newCat = input.value.trim().toUpperCase();
+      if (!newCat) {
+        showToast("Masukkan nama kategori terlebih dahulu", "⚠️");
+        return;
+      }
+      if (!customCategories.includes(newCat)) {
+        customCategories.push(newCat);
+        saveLocalState();
+      }
+      input.value = "";
+      document.getElementById("new-category-box").classList.add("hidden");
+      refreshCategoryDropdown(newCat);
+      showToast(`Kategori "${newCat}" ditambahkan!`, "🏷️");
+    }
+
+    // Nominal formatting helpers
+    function formatNominalInput(el) {
+      const raw = el.value.replace(/\D/g, "");
+      if (!raw) {
+        el.value = "";
+        return;
+      }
+      el.value = Number(raw).toLocaleString("id-ID");
+    }
+
+    function getRawNominal() {
+      const val = document.getElementById("tx-nominal").value.replace(/\D/g, "");
+      return Number(val) || 0;
+    }
+
+    function addQuickNominal(amount) {
+      const current = getRawNominal();
+      const updated = current + amount;
+      document.getElementById("tx-nominal").value = updated.toLocaleString("id-ID");
+    }
+
+    function clearNominal() {
+      document.getElementById("tx-nominal").value = "";
+    }
+
+    async function handleTransactionSubmit(e) {
+      e.preventDefault();
+      const type = getSelectedType();
+      const nominal = getRawNominal();
+      const keterangan = document.getElementById("tx-keterangan").value.trim();
+      const kategori = document.getElementById("tx-kategori").value;
+      const tanggal = document.getElementById("tx-tanggal").value;
+
+      if (nominal <= 0) {
+        showToast("Nominal harus lebih dari 0", "⚠️");
         return;
       }
 
-      isHost = false;
-      roomCode = code;
-      myName = document.getElementById('player-name').value.trim() || 'Guest';
+      const newEntry = {
+        tanggal,
+        type,
+        nominal,
+        keterangan,
+        kategori,
+        user: currentUser,
+      };
 
-      btnCreate.disabled = true;
-      btnJoin.disabled = true;
-      btnJoin.textContent = 'Menghubungkan...';
+      const btn = document.getElementById("btn-submit-tx");
+      const btnText = document.getElementById("submit-btn-text");
+      const originalText = btnText.textContent;
+      btn.disabled = true;
+      btnText.textContent = "Menyimpan...";
 
-      try {
-        roomRef = ref(db, 'rooms/' + roomCode);
-        const snap = await get(roomRef);
+      // Simpan ke state lokal terlebih dahulu
+      transactions.push(newEntry);
+      saveLocalState();
 
-        if (!snap.exists()) {
-          await leaveRoom(false);
-          showError('Lobby tidak ditemukan. Periksa kembali 4 digit kodenya.');
-          return;
+      // Kirim ke Google Sheet (baris paling bawah) jika URL tersedia
+      const scriptUrl = getScriptUrl();
+      if (scriptUrl) {
+        try {
+          await fetch(scriptUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(newEntry),
+          });
+          showToast("Tersimpan ke baris bawah Google Sheet!", "✅");
+        } catch (err) {
+          showToast("Tersimpan lokal (cek koneksi Google Sheet)", "⚠️");
         }
-
-        const data = snap.val();
-        if (data.status !== 'waiting') {
-          await leaveRoom(false);
-          showError('Lobby sudah penuh (maksimal 1v1).');
-          return;
-        }
-
-        await update(roomRef, {
-          status: 'playing',
-          guestName: myName
-        });
-        onDisconnect(roomRef).remove();
-
-        resetButtons();
-        listenRoom();
-      } catch (err) {
-        await leaveRoom(false);
-        showError('Gagal bergabung ke lobby: ' + err.message);
-      }
-    });
-
-    // 3. SINKRONISASI REALTIME
-    function listenRoom() {
-      unsubscribe = onValue(roomRef, (snap) => {
-        if (!snap.exists()) {
-          if (inArena) {
-            const badge = document.getElementById('conn-badge');
-            badge.textContent = '● Terputus';
-            badge.style.background = 'rgba(239, 68, 68, 0.15)';
-            badge.style.color = 'var(--danger)';
-            setBanner('Lawan keluar dari lobby.', 'lose');
-            disableChoices(true);
-            document.getElementById('btn-next-round').classList.add('hidden');
-          }
-          return;
-        }
-
-        const data = snap.val();
-
-        if (data.status === 'playing' && !inArena) {
-          inArena = true;
-          myScore = 0;
-          oppScore = 0;
-          currentRound = data.round || 1;
-          countedRound = 0;
-
-          const badge = document.getElementById('conn-badge');
-          badge.textContent = '● Terhubung';
-          badge.style.background = 'rgba(34, 197, 94, 0.15)';
-          badge.style.color = 'var(--success)';
-
-          const oppName = isHost ? (data.guestName || 'Guest') : (data.hostName || 'Host');
-          document.getElementById('game-room-code').textContent = roomCode;
-          document.getElementById('label-me').textContent = myName + (isHost ? ' (Host)' : ' (Guest)');
-          document.getElementById('label-opp').textContent = oppName + (isHost ? ' (Guest)' : ' (Host)');
-          updateScoreboard();
-          showScreen(screenGame);
-        }
-
-        if (inArena) {
-          renderRoundState(data);
-        }
-      });
-    }
-
-    function renderRoundState(data) {
-      const round = data.round || 1;
-      currentRound = round;
-      document.getElementById('round-num').textContent = round;
-
-      const myChoice = isHost ? data.hostChoice : data.guestChoice;
-      const oppChoice = isHost ? data.guestChoice : data.hostChoice;
-
-      // Update tampilan pilihan sendiri
-      document.querySelectorAll('.choice-btn').forEach(b => {
-        b.classList.toggle('selected', b.dataset.choice === myChoice);
-      });
-
-      if (myChoice) {
-        disableChoices(true);
-        document.getElementById('my-hand').textContent = EMOJI[myChoice];
-        document.getElementById('my-hand-text').textContent = LABEL[myChoice];
       } else {
-        disableChoices(false);
-        document.getElementById('my-hand').textContent = '❔';
-        document.getElementById('my-hand-text').textContent = 'Belum memilih';
+        showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
       }
 
-      // Jika kedua pemain sudah memilih -> buka hasil ronde
-      if (myChoice && oppChoice) {
-        document.getElementById('opp-hand').textContent = EMOJI[oppChoice];
-        document.getElementById('opp-hand-text').textContent = LABEL[oppChoice];
+      // Reset form (tetap pertahankan default radio Pengeluaran)
+      document.getElementById("tx-nominal").value = "";
+      document.getElementById("tx-keterangan").value = "";
+      document.querySelector('input[name="tx-type"][value="Pengeluaran"]').checked = true;
+      handleTypeChange();
 
-        const won =
-          (myChoice === 'batu' && oppChoice === 'gunting') ||
-          (myChoice === 'gunting' && oppChoice === 'kertas') ||
-          (myChoice === 'kertas' && oppChoice === 'batu');
+      btn.disabled = false;
+      btnText.textContent = originalText;
 
-        if (myChoice === oppChoice) {
-          setBanner('🤝 Hasil Seri!', 'draw');
-        } else if (won) {
-          setBanner('🎉 Kamu Menang Ronde Ini!', 'win');
-        } else {
-          setBanner('💀 Kamu Kalah Ronde Ini!', 'lose');
-        }
+      populateMonthFilter();
+      renderRecentMiniList();
+    }
 
-        if (countedRound < round) {
-          countedRound = round;
-          if (myChoice !== oppChoice) {
-            if (won) myScore++;
-            else oppScore++;
-            updateScoreboard();
-          }
-        }
+    // =========================================================================
+    // 5. NAVIGASI TAB & RENDER RIWAYAT
+    // =========================================================================
+    function switchTab(tabName) {
+      const tabs = ["input", "dashboard", "history"];
+      tabs.forEach((t) => {
+        document.getElementById(`tab-${t}`).classList.add("hidden");
+        const navBtn = document.getElementById(`nav-${t}`);
+        navBtn.className =
+          "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition";
+      });
 
-        document.getElementById('btn-next-round').classList.remove('hidden');
+      document.getElementById(`tab-${tabName}`).classList.remove("hidden");
+      const activeNav = document.getElementById(`nav-${tabName}`);
+      activeNav.className =
+        "flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition";
+
+      if (tabName === "dashboard") {
+        populateMonthFilter();
+        renderDashboard();
+      } else if (tabName === "history") {
+        renderFullHistory();
       } else {
-        document.getElementById('btn-next-round').classList.add('hidden');
-        if (oppChoice) {
-          document.getElementById('opp-hand').textContent = '✅';
-          document.getElementById('opp-hand-text').textContent = 'Sudah memilih!';
-        } else {
-          document.getElementById('opp-hand').textContent = '❔';
-          document.getElementById('opp-hand-text').textContent = 'Menunggu...';
-        }
-        setBanner(myChoice ? 'Menunggu lawan memilih gerakan...' : 'Pilih Batu, Gunting, atau Kertas!', '');
+        renderRecentMiniList();
       }
     }
 
-    // 4. AKSI PEMAIN
-    document.querySelectorAll('.choice-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!roomRef) return;
-        disableChoices(true);
-        const field = isHost ? 'hostChoice' : 'guestChoice';
-        await update(roomRef, { [field]: btn.dataset.choice });
+    function formatRupiah(num) {
+      return "Rp " + (Number(num) || 0).toLocaleString("id-ID");
+    }
+
+    function createTransactionItemHTML(tx) {
+      const isExpense = tx.type === "Pengeluaran";
+      const amountClass = isExpense ? "text-rose-600" : "text-emerald-600";
+      const sign = isExpense ? "-" : "+";
+      const userBadgeClass =
+        tx.user === "Kevin"
+          ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+          : "bg-pink-50 text-pink-700 border-pink-100";
+
+      return `
+        <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">
+                ${escapeHTML(tx.kategori)}
+              </span>
+              <span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ${userBadgeClass}">
+                ${escapeHTML(tx.user || "KV")}
+              </span>
+              <span class="text-[10px] text-slate-400">${escapeHTML(tx.tanggal)}</span>
+            </div>
+            <p class="text-xs font-bold text-slate-800 truncate">${escapeHTML(tx.keterangan || "-")}</p>
+          </div>
+          <div class="text-right shrink-0">
+            <p class="text-xs font-extrabold ${amountClass}">${sign}${formatRupiah(tx.nominal)}</p>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRecentMiniList() {
+      const container = document.getElementById("recent-mini-list");
+      const latest = [...transactions].reverse().slice(0, 4);
+
+      if (latest.length === 0) {
+        container.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>`;
+        return;
+      }
+      container.innerHTML = latest.map(createTransactionItemHTML).join("");
+    }
+
+    function setHistoryUserFilter(userFilter) {
+      historyUserFilter = userFilter;
+      ["ALL", "Kevin", "Vivie"].forEach((u) => {
+        const btn = document.getElementById(`hist-user-${u}`);
+        btn.className =
+          u === userFilter
+            ? "px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white"
+            : "px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200";
       });
-    });
+      renderFullHistory();
+    }
 
-    document.getElementById('btn-next-round').addEventListener('click', async () => {
-      if (!roomRef) return;
-      document.getElementById('btn-next-round').classList.add('hidden');
-      await update(roomRef, {
-        round: currentRound + 1,
-        hostChoice: '',
-        guestChoice: ''
+    function renderFullHistory() {
+      const container = document.getElementById("full-history-list");
+      let list = [...transactions].reverse();
+      if (historyUserFilter !== "ALL") {
+        list = list.filter((t) => t.user === historyUserFilter);
+      }
+
+      document.getElementById("history-count-label").textContent = `${list.length} transaksi tercatat`;
+
+      if (list.length === 0) {
+        container.innerHTML = `
+          <div class="bg-white rounded-3xl p-8 text-center border border-slate-100">
+            <p class="text-sm font-bold text-slate-600">Belum ada data transaksi</p>
+            <p class="text-xs text-slate-400 mt-1">Mulai catat pengeluaran atau pemasukan di tab Input.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = list.map(createTransactionItemHTML).join("");
+    }
+
+    // =========================================================================
+    // 6. DASHBOARD ANALYTICS & CHARTS
+    // =========================================================================
+    function populateMonthFilter() {
+      const select = document.getElementById("dash-month-filter");
+      const currentVal = select.value;
+      const months = new Set();
+
+      transactions.forEach((tx) => {
+        if (tx.tanggal && tx.tanggal.length >= 7) {
+          months.add(tx.tanggal.substring(0, 7)); // YYYY-MM
+        }
       });
-    });
 
-    function setBanner(text, type) {
-      const banner = document.getElementById('game-banner');
-      banner.textContent = text;
-      banner.className = 'banner' + (type ? ' ' + type : '');
+      const sortedMonths = Array.from(months).sort().reverse();
+      select.innerHTML = '<option value="ALL">Semua Bulan</option>';
+      sortedMonths.forEach((ym) => {
+        const opt = document.createElement("option");
+        opt.value = ym;
+        opt.textContent = formatYearMonthLabel(ym);
+        select.appendChild(opt);
+      });
+
+      if (currentVal && (currentVal === "ALL" || sortedMonths.includes(currentVal))) {
+        select.value = currentVal;
+      }
     }
 
-    function disableChoices(disabled) {
-      document.querySelectorAll('.choice-btn').forEach(b => b.disabled = disabled);
+    function formatYearMonthLabel(ym) {
+      const [y, m] = ym.split("-");
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+      const idx = parseInt(m, 10) - 1;
+      return `${monthNames[idx] || m} ${y}`;
     }
 
-    function updateScoreboard() {
-      document.getElementById('score-me').textContent = myScore;
-      document.getElementById('score-opp').textContent = oppScore;
+    function setCategoryReportType(type) {
+      categoryReportType = type;
+      const btnExp = document.getElementById("cat-filter-expense");
+      const btnInc = document.getElementById("cat-filter-income");
+
+      if (type === "Pengeluaran") {
+        btnExp.className = "px-2.5 py-1 rounded-lg bg-white text-rose-600 shadow-sm transition";
+        btnInc.className = "px-2.5 py-1 rounded-lg text-slate-500 transition";
+      } else {
+        btnInc.className = "px-2.5 py-1 rounded-lg bg-white text-emerald-600 shadow-sm transition";
+        btnExp.className = "px-2.5 py-1 rounded-lg text-slate-500 transition";
+      }
+      renderCategoryReport();
     }
 
-    document.getElementById('btn-copy').addEventListener('click', () => {
-      navigator.clipboard.writeText(roomCode);
-      const btn = document.getElementById('btn-copy');
-      btn.textContent = 'Tersalin!';
-      setTimeout(() => btn.textContent = 'Salin Kode', 1500);
-    });
+    function renderDashboard() {
+      const selectedMonth = document.getElementById("dash-month-filter").value;
+      const filteredTx =
+        selectedMonth === "ALL"
+          ? transactions
+          : transactions.filter((t) => t.tanggal && t.tanggal.startsWith(selectedMonth));
 
-    document.getElementById('btn-cancel-wait').addEventListener('click', async () => {
-      await leaveRoom(true);
-      showScreen(screenMenu);
-    });
+      let totalIncome = 0;
+      let totalExpense = 0;
 
-    document.getElementById('btn-leave').addEventListener('click', async () => {
-      await leaveRoom(true);
-      showScreen(screenMenu);
-    });
+      filteredTx.forEach((tx) => {
+        if (tx.type === "Pemasukan") totalIncome += Number(tx.nominal) || 0;
+        else totalExpense += Number(tx.nominal) || 0;
+      });
+
+      const balance = totalIncome - totalExpense;
+      document.getElementById("kpi-income").textContent = formatRupiah(totalIncome);
+      document.getElementById("kpi-expense").textContent = formatRupiah(totalExpense);
+      document.getElementById("kpi-balance").textContent =
+        (balance < 0 ? "-" : "") + formatRupiah(Math.abs(balance));
+
+      const statusBadge = document.getElementById("kpi-status-badge");
+      if (balance > 0) {
+        statusBadge.textContent = "Surplus";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300";
+      } else if (balance < 0) {
+        statusBadge.textContent = "Defisit";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300";
+      } else {
+        statusBadge.textContent = "Seimbang";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300";
+      }
+
+      renderMonthlyReport();
+      renderCategoryReport();
+    }
+
+    // REPORT 1: Bulanan Pengeluaran vs Pemasukan
+    function renderMonthlyReport() {
+      const monthlyMap = {};
+
+      transactions.forEach((tx) => {
+        if (!tx.tanggal || tx.tanggal.length < 7) return;
+        const ym = tx.tanggal.substring(0, 7);
+        if (!monthlyMap[ym]) {
+          monthlyMap[ym] = { income: 0, expense: 0 };
+        }
+        if (tx.type === "Pemasukan") monthlyMap[ym].income += Number(tx.nominal) || 0;
+        else monthlyMap[ym].expense += Number(tx.nominal) || 0;
+      });
+
+      const sortedMonths = Object.keys(monthlyMap).sort();
+      const labels = sortedMonths.map(formatYearMonthLabel);
+      const incomeData = sortedMonths.map((m) => monthlyMap[m].income);
+      const expenseData = sortedMonths.map((m) => monthlyMap[m].expense);
+
+      const ctx = document.getElementById("monthlyChart").getContext("2d");
+      if (monthlyChartInstance) monthlyChartInstance.destroy();
+
+      monthlyChartInstance = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: labels.length ? labels : ["Belum Ada Data"],
+          datasets: [
+            {
+              label: "Pemasukan",
+              data: incomeData.length ? incomeData : [0],
+              backgroundColor: "#10b981",
+              borderRadius: 6,
+            },
+            {
+              label: "Pengeluaran",
+              data: expenseData.length ? expenseData : [0],
+              backgroundColor: "#f43f5e",
+              borderRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: { boxWidth: 10, font: { size: 11, weight: "bold" } },
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                font: { size: 10 },
+                callback: (val) => (val >= 1000000 ? val / 1000000 + "jt" : val >= 1000 ? val / 1000 + "rb" : val),
+              },
+            },
+            x: {
+              ticks: { font: { size: 10, weight: "bold" } },
+            },
+          },
+        },
+      });
+
+      // Render table list below chart
+      const breakdownEl = document.getElementById("monthly-breakdown-list");
+      if (sortedMonths.length === 0) {
+        breakdownEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-3">Belum ada data bulanan.</p>`;
+        return;
+      }
+
+      breakdownEl.innerHTML = [...sortedMonths]
+        .reverse()
+        .map((ym) => {
+          const item = monthlyMap[ym];
+          const diff = item.income - item.expense;
+          return `
+            <div class="py-2.5 flex items-center justify-between text-xs">
+              <div>
+                <p class="font-extrabold text-slate-800">${formatYearMonthLabel(ym)}</p>
+                <p class="text-[11px] text-slate-400 mt-0.5">
+                  Masuk: <span class="text-emerald-600 font-semibold">${formatRupiah(item.income)}</span> • 
+                  Keluar: <span class="text-rose-600 font-semibold">${formatRupiah(item.expense)}</span>
+                </p>
+              </div>
+              <span class="font-extrabold ${diff >= 0 ? "text-emerald-600" : "text-rose-600"}">
+                ${diff >= 0 ? "+" : "-"}${formatRupiah(Math.abs(diff))}
+              </span>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    // REPORT 2: Berdasarkan Kategori
+    function renderCategoryReport() {
+      const selectedMonth = document.getElementById("dash-month-filter").value;
+      const filteredTx = transactions.filter((t) => {
+        const matchType = t.type === categoryReportType;
+        const matchMonth = selectedMonth === "ALL" || (t.tanggal && t.tanggal.startsWith(selectedMonth));
+        return matchType && matchMonth;
+      });
+
+      const catMap = {};
+      let grandTotal = 0;
+
+      filteredTx.forEach((tx) => {
+        const cat = (tx.kategori || "OTHER").toUpperCase();
+        if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
+        catMap[cat].total += Number(tx.nominal) || 0;
+        catMap[cat].count += 1;
+        grandTotal += Number(tx.nominal) || 0;
+      });
+
+      const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
+      const palette = [
+        "#6366f1",
+        "#f43f5e",
+        "#10b981",
+        "#f59e0b",
+        "#06b6d4",
+        "#8b5cf6",
+        "#ec4899",
+        "#14b8a6",
+        "#64748b",
+      ];
+
+      const ctx = document.getElementById("categoryChart").getContext("2d");
+      if (categoryChartInstance) categoryChartInstance.destroy();
+
+      categoryChartInstance = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: sortedCats.length ? sortedCats.map((c) => c[0]) : ["Kosong"],
+          datasets: [
+            {
+              data: sortedCats.length ? sortedCats.map((c) => c[1].total) : [1],
+              backgroundColor: sortedCats.length ? palette : ["#e2e8f0"],
+              borderWidth: 2,
+              borderColor: "#ffffff",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: "65%",
+          plugins: {
+            legend: {
+              position: "right",
+              labels: { boxWidth: 10, font: { size: 10, weight: "bold" } },
+            },
+          },
+        },
+      });
+
+      const listEl = document.getElementById("category-breakdown-list");
+      if (sortedCats.length === 0) {
+        listEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-3">Belum ada transaksi ${categoryReportType.toLowerCase()} pada periode ini.</p>`;
+        return;
+      }
+
+      listEl.innerHTML = sortedCats
+        .map(([cat, info], idx) => {
+          const pct = grandTotal > 0 ? ((info.total / grandTotal) * 100).toFixed(1) : 0;
+          const color = palette[idx % palette.length];
+          return `
+            <div class="space-y-1">
+              <div class="flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full" style="background-color:${color}"></span>
+                  <span class="font-extrabold text-slate-800">${escapeHTML(cat)}</span>
+                  <span class="text-[10px] text-slate-400">(${info.count}x)</span>
+                </div>
+                <div class="text-right">
+                  <span class="font-extrabold text-slate-900">${formatRupiah(info.total)}</span>
+                  <span class="text-[10px] font-bold text-slate-400 ml-1">${pct}%</span>
+                </div>
+              </div>
+              <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div class="h-full rounded-full" style="width:${pct}%; background-color:${color}"></div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    // =========================================================================
+    // 7. UTILITIES
+    // =========================================================================
+    function showToast(message, icon = "✅") {
+      const toast = document.getElementById("toast");
+      document.getElementById("toast-msg").textContent = message;
+      document.getElementById("toast-icon").textContent = icon;
+
+      toast.classList.remove("opacity-0", "-translate-y-3");
+      toast.classList.add("opacity-100", "translate-y-0");
+
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => {
+        toast.classList.remove("opacity-100", "translate-y-0");
+        toast.classList.add("opacity-0", "-translate-y-3");
+      }, 3000);
+    }
+
+    function escapeHTML(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
   </script>
 </body>
 </html>
