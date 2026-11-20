@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Suit PvP 1v1 — Multiplayer Lobby</title>
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -14,7 +14,6 @@
       --text: #f8fafc;
       --muted: #94a3b8;
       --primary: #38bdf8;
-      --primary-hover: #0284c7;
       --success: #22c55e;
       --danger: #ef4444;
       --warning: #f59e0b;
@@ -65,7 +64,7 @@
       transition: transform 0.1s, opacity 0.2s;
     }
     button:active { transform: scale(0.98); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
     .btn-primary { background: var(--primary); color: #0f172a; }
     .btn-secondary { background: #334155; color: var(--text); }
     .btn-success { background: var(--success); color: #0f172a; }
@@ -85,7 +84,7 @@
     .divider:not(:empty)::before { margin-right: .75em; }
     .divider:not(:empty)::after { margin-left: .75em; }
     .join-row { display: flex; gap: 0.5rem; }
-    .join-row input { margin-bottom: 0; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; text-align: center; }
+    .join-row input { margin-bottom: 0; letter-spacing: 3px; font-weight: 700; text-align: center; }
     .join-row button { width: auto; white-space: nowrap; padding: 0 1.25rem; }
 
     /* Waiting Lobby */
@@ -207,14 +206,14 @@
       <label for="player-name">Nama Kamu</label>
       <input type="text" id="player-name" placeholder="Masukkan nama..." maxlength="15" />
 
-      <button id="btn-create" class="btn-primary">Buat Lobby Baru (Host)</button>
+      <button type="button" id="btn-create" class="btn-primary">Buat Lobby Baru (Host)</button>
 
       <div class="divider">ATAU GABUNG SEBAGAI GUEST</div>
 
       <label for="join-code">Masukkan 4 Digit Kode Lobby</label>
       <div class="join-row">
         <input type="text" id="join-code" placeholder="1234" maxlength="4" inputmode="numeric" />
-        <button id="btn-join" class="btn-secondary">Join</button>
+        <button type="button" id="btn-join" class="btn-secondary">Join</button>
       </div>
       <p id="menu-error" class="error-msg hidden"></p>
     </div>
@@ -227,7 +226,7 @@
       <div class="room-box">
         <div style="font-size: 0.8rem; color: var(--muted);">KODE LOBBY</div>
         <div id="display-code" class="room-code">----</div>
-        <button id="btn-copy" class="btn-secondary" style="width: auto; padding: 0.45rem 1rem; font-size: 0.8rem;">
+        <button type="button" id="btn-copy" class="btn-secondary" style="width: auto; padding: 0.45rem 1rem; font-size: 0.8rem;">
           Salin Kode
         </button>
       </div>
@@ -235,7 +234,7 @@
       <p style="text-align: center; font-size: 0.9rem; color: var(--muted); margin-bottom: 1.25rem;">
         <span class="pulse"></span> Menunggu Guest bergabung...
       </p>
-      <button id="btn-cancel-wait" class="btn-secondary">Batal</button>
+      <button type="button" id="btn-cancel-wait" class="btn-secondary">Batal</button>
     </div>
 
     <!-- SCREEN 3: ARENA PVP -->
@@ -273,92 +272,21 @@
       <div id="game-banner" class="banner">Pilih Batu, Gunting, atau Kertas!</div>
 
       <div id="choice-buttons" class="choices">
-        <button class="choice-btn" data-choice="batu">
+        <button type="button" class="choice-btn" data-choice="batu">
           <span class="icon">✊</span>
           <span class="text">Batu</span>
         </button>
-        <button class="choice-btn" data-choice="gunting">
+        <button type="button" class="choice-btn" data-choice="gunting">
           <span class="icon">✌️</span>
           <span class="text">Gunting</span>
         </button>
-        <button class="choice-btn" data-choice="kertas">
+        <button type="button" class="choice-btn" data-choice="kertas">
           <span class="icon">✋</span>
           <span class="text">Kertas</span>
         </button>
       </div>
 
-      <button id="btn-next-round" class="btn-success hidden" style="margin-top: 1rem;">
+      <button type="button" id="btn-next-round" class="btn-success hidden" style="margin-top: 1rem;">
         Ronde Berikutnya
       </button>
-      <button id="btn-leave" class="btn-secondary" style="margin-top: 0.65rem; font-size: 0.85rem;">
-        Keluar Lobby
-      </button>
-    </div>
-  </div>
-
-  <script>
-    const PREFIX = 'suit-pvp-id-v1-';
-    const EMOJI = { batu: '✊', gunting: '✌️', kertas: '✋' };
-    const LABEL = { batu: 'Batu', gunting: 'Gunting', kertas: 'Kertas' };
-
-    let peer = null;
-    let conn = null;
-    let isHost = false;
-    let roomCode = '';
-    let myName = '';
-    let oppName = '';
-    let myScore = 0;
-    let oppScore = 0;
-    let myChoice = null;
-    let oppChoice = null;
-
-    // Elements
-    const screenMenu = document.getElementById('screen-menu');
-    const screenWait = document.getElementById('screen-wait');
-    const screenGame = document.getElementById('screen-game');
-    const menuError = document.getElementById('menu-error');
-
-    function showScreen(screen) {
-      [screenMenu, screenWait, screenGame].forEach(s => s.classList.add('hidden'));
-      screen.classList.remove('hidden');
-    }
-
-    function showError(msg) {
-      menuError.textContent = msg;
-      menuError.classList.remove('hidden');
-    }
-
-    function clearError() {
-      menuError.classList.add('hidden');
-    }
-
-    function cleanup() {
-      if (conn) { conn.close(); conn = null; }
-      if (peer) { peer.destroy(); peer = null; }
-      myScore = 0; oppScore = 0;
-      myChoice = null; oppChoice = null;
-    }
-
-    // 1. CREATE LOBBY (HOST)
-    document.getElementById('btn-create').addEventListener('click', () => {
-      clearError();
-      isHost = true;
-      myName = document.getElementById('player-name').value.trim() || 'Host';
-      createHostPeer();
-    });
-
-    function createHostPeer() {
-      roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-      peer = new Peer(PREFIX + roomCode);
-
-      peer.on('open', () => {
-        document.getElementById('display-code').textContent = roomCode;
-        showScreen(screenWait);
-      });
-
-      peer.on('connection', (connection) => {
-        if (conn) {
-          connection.close(); // Batasi hanya 1v1 (1 Guest)
-          return;
-        }
-        conn = connection;
+      <button type="button" id
