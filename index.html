@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>KV Finance & Invest — Kevin & Vivie</title>
+  <title>KV Finance &amp; Invest — Kevin &amp; Vivie</title>
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -63,12 +63,13 @@
 </head>
 <body class="min-h-screen flex justify-center items-start bg-slate-200 text-slate-800">
 
-  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Planner 7 Kolom A:G, Invest 10 Kolom A:J, GOOGLEFINANCE) -->
+  <!-- HIDDEN GOOGLE APPS SCRIPT TEMPLATE (Planner 7 Kolom A:G, Invest 10 Kolom A:J, Cache Harga 6 Jam) -->
   <textarea id="appsScriptTemplate" style="display:none;">const SHEET_ID = '18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI';
-const PLANNER_SHEET_NAME = 'Planner';
+const TX_SHEET_NAME = 'Planner';
+const FALLBACK_TX_SHEET_NAME = 'Sheet1';
 const INVEST_SHEET_NAME = 'Invest';
-const PLANNER_HEADERS = ['Date', 'Type', 'Amount', 'Keterangan', 'Kategori', 'user', 'Timestamp'];
-const INVEST_HEADERS = ['Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'];
+const MARKET_PRICE_CACHE_KEY = 'market_prices_v1';
+const MARKET_PRICE_CACHE_TTL_SECONDS = 21600; // 6 jam
 
 function getOrCreateSheet(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
@@ -81,30 +82,52 @@ function getOrCreateSheet(ss, name, headers) {
   return sheet;
 }
 
-function getPlannerSheet(ss) {
-  return ss.getSheetByName(PLANNER_SHEET_NAME) || ss.getSheetByName('Sheet1') || getOrCreateSheet(ss, PLANNER_SHEET_NAME, PLANNER_HEADERS);
+function getTxSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet =
+    ss.getSheetByName(TX_SHEET_NAME) ||
+    ss.getSheetByName(FALLBACK_TX_SHEET_NAME) ||
+    ss.getSheets()[0];
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Date', 'Type', 'Amount', 'Keterangan', 'Kategori', 'user', 'Timestamp']);
+  }
+  return sheet;
 }
 
-function getInvestSheet(ss) {
-  return getOrCreateSheet(ss, INVEST_SHEET_NAME, INVEST_HEADERS);
+function getInvestSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  return getOrCreateSheet(ss, INVEST_SHEET_NAME, [
+    'Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'
+  ]);
 }
 
-function getUnitMultiplier(saham) {
-  const code = String(saham || '').trim().toUpperCase();
-  // Saham IDX (seperti BBCA/IDR) menggunakan 1 lot = 100 lembar; kripto/unit langsung menggunakan 1
-  if (code.indexOf('BTC') !== -1 || code.indexOf('CRYPTO') !== -1) return 1;
-  return 100;
+function formatCellDate(val, tz) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, tz, 'yyyy-MM-dd');
+  }
+  return String(val).trim();
 }
 
-function parseNumberFlexible(val) {
+function formatCellTimestamp(val, tz) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, tz, 'yyyy-MM-dd HH:mm:ss');
+  }
+  return String(val).trim();
+}
+
+function parseNumber(val) {
   if (typeof val === 'number') return isFinite(val) ? val : 0;
   if (val === undefined || val === null || String(val).trim() === '') return 0;
-  const cleaned = String(val).trim().replace(/^rp\s*/i, '').replace(/[^0-9.,-]/g, '');
-  if (!cleaned) return 0;
+
+  const str = String(val).trim().replace(/^rp\s*/i, '');
+  const cleaned = str.replace(/[^0-9.,-]/g, '');
+  if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === ',') return 0;
 
   let normalized = cleaned;
-  const hasComma = cleaned.includes(',');
-  const hasDot = cleaned.includes('.');
+  const hasComma = cleaned.indexOf(',') !== -1;
+  const hasDot = cleaned.indexOf('.') !== -1;
 
   if (hasComma && hasDot) {
     if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
@@ -114,14 +137,22 @@ function parseNumberFlexible(val) {
     }
   } else if (hasComma) {
     const parts = cleaned.split(',');
-    if (parts.length === 2 && parts[1].length <= 2) {
-      normalized = parts[0].replace(/,/g, '') + '.' + parts[1];
+    const intDigits = parts[0].replace('-', '');
+    if (parts.length > 2) {
+      normalized = cleaned.replace(/,/g, '');
+    } else if (intDigits === '0' || parts[1].length !== 3 || intDigits.length > 3) {
+      normalized = parts[0] + '.' + parts[1];
     } else {
       normalized = cleaned.replace(/,/g, '');
     }
   } else if (hasDot) {
     const parts = cleaned.split('.');
-    if (parts.length === 2 && parts[1].length === 3) {
+    const intDigits = parts[0].replace('-', '');
+    if (parts.length > 2) {
+      normalized = cleaned.replace(/\./g, '');
+    } else if (intDigits === '0' || parts[1].length !== 3 || intDigits.length > 3) {
+      normalized = cleaned;
+    } else {
       normalized = cleaned.replace(/\./g, '');
     }
   }
@@ -136,154 +167,184 @@ function pickNumber(obj, keys, fallback) {
   for (let i = 0; i < keys.length; i++) {
     const k = keys[i];
     if (obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') {
-      const parsed = parseNumberFlexible(obj[k]);
-      if (!isNaN(parsed)) return parsed;
+      const parsed = parseNumber(obj[k]);
+      if (isFinite(parsed)) return parsed;
     }
   }
   return fallback;
 }
 
-function getGoogleFinancePrices(ss) {
-  let priceSheet = ss.getSheetByName('_MarketPrices');
-  if (!priceSheet) {
-    priceSheet = ss.insertSheet('_MarketPrices');
-    priceSheet.getRange('A1:B2').setValues([
-      ['BBCA/IDR', '=GOOGLEFINANCE("IDX:BBCA", "price")'],
-      ['BTC/IDR', '=GOOGLEFINANCE("CURRENCY:BTCIDR")']
-    ]);
-    SpreadsheetApp.flush();
+function fetchMarketPrices(forceRefresh) {
+  const cache = CacheService.getScriptCache();
+  const cachedJson = cache.get(MARKET_PRICE_CACHE_KEY);
+  let cached = {};
+  if (cachedJson) {
+    try { cached = JSON.parse(cachedJson) || {}; } catch (e) { cached = {}; }
   }
-  const vals = priceSheet.getRange('A1:B2').getValues();
-  const prices = {};
-  for (let i = 0; i < vals.length; i++) {
-    const code = String(vals[i][0] || '').trim().toUpperCase();
-    const num = Number(vals[i][1]);
-    if (code && !isNaN(num) && num > 0) {
-      prices[code] = num;
+
+  const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
+  let bbcaPrice = Number(cached.bbca) || 0;
+  let btcPrice = Number(cached.btc) || 0;
+  let updatedAt = cached.updatedAt || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
+
+  if (!forceRefresh && bbcaPrice > 0 && btcPrice > 0) {
+    return { 'BBCA/IDR': bbcaPrice, 'BTC/IDR': btcPrice, updatedAt: updatedAt, cached: true };
+  }
+
+  let updatedAny = false;
+
+  try {
+    const resBtc = UrlFetchApp.fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr',
+      { muteHttpExceptions: true }
+    );
+    if (resBtc.getResponseCode() === 200) {
+      const jsonBtc = JSON.parse(resBtc.getContentText());
+      if (jsonBtc && jsonBtc.bitcoin && Number(jsonBtc.bitcoin.idr) > 0) {
+        btcPrice = Number(jsonBtc.bitcoin.idr);
+        updatedAny = true;
+      }
     }
+  } catch (e) {}
+
+  try {
+    const resBbca = UrlFetchApp.fetch(
+      'https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d',
+      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } }
+    );
+    if (resBbca.getResponseCode() === 200) {
+      const jsonBbca = JSON.parse(resBbca.getContentText());
+      const result0 = jsonBbca && jsonBbca.chart && jsonBbca.chart.result && jsonBbca.chart.result[0];
+      const meta = result0 && result0.meta;
+      const regularPrice = Number((meta && meta.regularMarketPrice) || 0);
+      const prevClose = Number((meta && (meta.chartPreviousClose || meta.previousClose)) || 0);
+      if (regularPrice > 0) {
+        bbcaPrice = regularPrice;
+        updatedAny = true;
+      } else if (prevClose > 0) {
+        bbcaPrice = prevClose;
+        updatedAny = true;
+      }
+    }
+  } catch (e) {}
+
+  if (updatedAny && (bbcaPrice > 0 || btcPrice > 0)) {
+    updatedAt = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
+    cache.put(
+      MARKET_PRICE_CACHE_KEY,
+      JSON.stringify({ bbca: bbcaPrice, btc: btcPrice, updatedAt: updatedAt }),
+      MARKET_PRICE_CACHE_TTL_SECONDS
+    );
   }
-  return prices;
+
+  return { 'BBCA/IDR': bbcaPrice, 'BTC/IDR': btcPrice, updatedAt: updatedAt, cached: !updatedAny };
 }
 
-function doGet() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
 
-  // 1. Baca Planner (7 Kolom A:G)
-  const s1 = getPlannerSheet(ss);
-  const s1Rows = s1 ? s1.getDataRange().getDisplayValues() : [];
-  const sheet1Data = [];
-
-  for (let i = 1; i < s1Rows.length; i++) {
-    const r = s1Rows[i];
-    if (!r[0] && !r[2] && !r[3]) continue;
-    sheet1Data.push({
-      date: String(r[0] || '').trim(),
-      type: String(r[1] || 'Pengeluaran').trim(),
-      amount: Math.round(parseNumberFlexible(r[2])),
-      keterangan: String(r[3] || '').trim(),
-      kategori: String(r[4] || 'OTHER').trim().toUpperCase(),
-      user: String(r[5] || '').trim(),
-      timestamp: String(r[6] || '').trim()
-    });
-  }
-
-  // 2. Baca Sheet Invest (10 Kolom A:J)
-  const sInv = getInvestSheet(ss);
-  const invRows = sInv ? sInv.getDataRange().getDisplayValues() : [];
-  const investData = [];
-
-  for (let i = 1; i < invRows.length; i++) {
-    const r = invRows[i];
-    if (!r[0] && !r[3] && !r[5]) continue;
-    const lot = parseNumberFlexible(r[3]);
-    const avgPrice = Math.round(parseNumberFlexible(r[4]));
-    const saham = String(r[5] || '').trim().toUpperCase();
-    const mult = getUnitMultiplier(saham);
-    let amount = Math.round(parseNumberFlexible(r[2]));
-    if (amount === 0 && lot > 0 && avgPrice > 0) {
-      amount = Math.round(lot * mult * avgPrice);
-    }
-    investData.push({
-      date: String(r[0] || '').trim(),
-      type: String(r[1] || 'Invest').trim(),
-      amount: amount,
-      lot: lot,
-      avgPrice: avgPrice,
-      saham: saham,
-      keterangan: String(r[6] || '').trim(),
-      kategori: String(r[7] || 'INVEST').trim().toUpperCase(),
-      user: String(r[8] || '').trim(),
-      timestamp: String(r[9] || '').trim()
-    });
-  }
-
-  // 3. Ambil harga GOOGLEFINANCE
-  let prices = {};
+function doGet(e) {
   try {
-    prices = getGoogleFinancePrices(ss);
-  } catch (err) {
-    prices = {};
-  }
+    const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
+    const params = (e && e.parameter) || {};
+    const forceRefresh = params.refresh === '1' || params.refresh === 'true';
 
-  return ContentService
-    .createTextOutput(JSON.stringify({
-      status: 'success',
-      sheet1: sheet1Data,
-      invest: investData,
-      prices: prices
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
+    const txSheet = getTxSheet();
+    const txData = txSheet.getDataRange().getValues();
+    const transactions = [];
+
+    for (let i = 1; i < txData.length; i++) {
+      const row = txData[i];
+      if (!row[0] && !row[2] && !row[3]) continue;
+      const rawType = String(row[1] || 'Pengeluaran').trim();
+      transactions.push({
+        tanggal: formatCellDate(row[0], tz),
+        type: rawType.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran',
+        nominal: parseNumber(row[2]),
+        keterangan: String(row[3] || '').trim(),
+        kategori: String(row[4] || 'OTHER').trim().toUpperCase(),
+        user: String(row[5] || '').trim(),
+        timestamp: formatCellTimestamp(row[6], tz)
+      });
+    }
+
+    const investSheet = getInvestSheet();
+    const invData = investSheet.getDataRange().getValues();
+    const investments = [];
+
+    for (let i = 1; i < invData.length; i++) {
+      const row = invData[i];
+      if (!row[0] && !row[2] && !row[3] && !row[5]) continue;
+      const lot = parseNumber(row[3]);
+      let avgBuy = parseNumber(row[4]);
+      let amount = parseNumber(row[2]);
+      if (avgBuy === 0 && amount > 0 && lot > 0) avgBuy = amount / lot;
+      if (amount === 0 && lot > 0 && avgBuy > 0) amount = Math.round(lot * avgBuy);
+      investments.push({
+        tanggal: formatCellDate(row[0], tz),
+        type: String(row[1] || 'Invest').trim(),
+        amount: amount,
+        lot: lot,
+        avgBuy: avgBuy,
+        saham: String(row[5] || '').trim().toUpperCase(),
+        keterangan: String(row[6] || '').trim(),
+        kategori: String(row[7] || 'INVEST').trim().toUpperCase(),
+        user: String(row[8] || '').trim(),
+        timestamp: formatCellTimestamp(row[9], tz)
+      });
+    }
+
+    const prices = fetchMarketPrices(forceRefresh);
+    return jsonResponse({ status: 'success', data: transactions, investments: investments, prices: prices });
+  } catch (err) {
+    return jsonResponse({ status: 'error', message: err.toString() });
+  }
 }
 
 function doPost(e) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const p = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  try {
+    const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
+    const payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const rawType = String(payload.type || 'Pengeluaran').trim();
+    const isInvest = rawType.toLowerCase() === 'invest' || String(payload.targetSheet || '').toLowerCase() === 'invest';
+    const tanggal = String(payload.tanggal || payload.date || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd')).trim();
+    const user = String(payload.user || 'Kevin').trim();
+    const keterangan = String(payload.keterangan || '').trim();
+    const kategori = String(payload.kategori || (isInvest ? 'INVEST' : 'OTHER')).trim().toUpperCase();
+    const timestamp = String(payload.timestamp || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss')).trim();
 
-  if (p.targetSheet === 'Invest' || p.type === 'Invest') {
-    const invSheet = getInvestSheet(ss);
-    const saham = String(p.saham || p.kodeInvest || p.kode_invest || 'BBCA/IDR').trim().toUpperCase();
-    const lot = pickNumber(p, ['lot', 'lotLembar', 'lot_lembar', 'amountLot'], 0);
-    let avgPrice = Math.round(pickNumber(p, ['avgPrice', 'avgBuy', 'averageBuy', 'average_buy', 'avg_buy', 'price'], 0));
-    const mult = getUnitMultiplier(saham);
-    let amount = Math.round(pickNumber(p, ['amount', 'nominal', 'totalAmount'], 0));
-
-    if (avgPrice === 0 && amount > 0 && lot > 0) {
-      avgPrice = Math.round(amount / (lot * mult));
+    if (isInvest) {
+      const investSheet = getInvestSheet();
+      const lot = pickNumber(payload, ['lot', 'lembar', 'lotLembar', 'lot_lembar', 'amountLot', 'amount_lot'], 0);
+      let avgBuy = pickNumber(payload, ['avgBuy', 'avgPrice', 'averageBuy', 'average_buy', 'avg_buy', 'price', 'priceBuy'], 0);
+      let amount = pickNumber(payload, ['amount', 'nominal', 'totalAmount', 'total_amount'], 0);
+      if (lot <= 0) return jsonResponse({ status: 'error', message: 'Jumlah lembar/unit harus lebih dari 0' });
+      if (avgBuy === 0 && amount > 0 && lot > 0) avgBuy = amount / lot;
+      if (amount === 0 && lot > 0 && avgBuy > 0) amount = Math.round(lot * avgBuy);
+      if (avgBuy <= 0 || amount <= 0) return jsonResponse({ status: 'error', message: 'Harga beli atau total modal harus lebih dari 0' });
+      const saham = String(payload.saham || payload.kodeInvest || payload.kode_invest || 'BBCA/IDR').trim().toUpperCase();
+      investSheet.appendRow([tanggal, 'Invest', amount, lot, avgBuy, saham, keterangan, kategori || 'INVEST', user, timestamp]);
+      return jsonResponse({
+        status: 'success',
+        message: 'Data investasi berhasil ditambahkan',
+        saved: { tanggal: tanggal, amount: amount, lot: lot, avgBuy: avgBuy, saham: saham }
+      });
     }
-    if (amount === 0 && lot > 0 && avgPrice > 0) {
-      amount = Math.round(lot * mult * avgPrice);
-    }
 
-    invSheet.appendRow([
-      String(p.date || p.tanggal || '').trim(),
-      'Invest',
-      amount,
-      lot,
-      avgPrice,
-      saham,
-      String(p.keterangan || '').trim(),
-      String(p.kategori || 'INVEST').trim().toUpperCase(),
-      String(p.user || '').trim(),
-      String(p.timestamp || '').trim()
-    ]);
-  } else {
-    const s1 = getPlannerSheet(ss);
-    const amount = Math.round(pickNumber(p, ['amount', 'nominal'], 0));
-    const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
-    s1.appendRow([
-      String(p.date || p.tanggal || '').trim(),
-      type,
-      amount,
-      String(p.keterangan || '').trim(),
-      String(p.kategori || 'OTHER').trim().toUpperCase(),
-      String(p.user || '').trim(),
-      String(p.timestamp || '').trim()
-    ]);
+    const txSheet = getTxSheet();
+    const nominal = pickNumber(payload, ['nominal', 'amount'], 0);
+    if (nominal <= 0) return jsonResponse({ status: 'error', message: 'Nominal transaksi harus lebih dari 0' });
+    const normalizedType = rawType.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+    txSheet.appendRow([tanggal, normalizedType, nominal, keterangan, kategori || 'OTHER', user, timestamp]);
+    return jsonResponse({
+      status: 'success',
+      message: 'Data transaksi berhasil ditambahkan',
+      saved: { tanggal: tanggal, type: normalizedType, nominal: nominal, kategori: kategori || 'OTHER' }
+    });
+  } catch (err) {
+    return jsonResponse({ status: 'error', message: err.toString() });
   }
-
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: 'success' }))
-    .setMimeType(ContentService.MimeType.JSON);
 }</textarea>
 
   <!-- MOBILE APP VIEWPORT CONTAINER (Max Width 430px) -->
@@ -306,20 +367,20 @@ function doPost(e) {
           </svg>
         </div>
         <span class="inline-block text-xs font-bold tracking-wider uppercase text-indigo-300 bg-indigo-500/20 px-3 py-1 rounded-full mb-3">
-          Household Finance & Invest
+          Household Finance &amp; Invest
         </span>
         <h1 class="text-3xl font-extrabold tracking-tight leading-tight">
           KV Finance
         </h1>
         <p class="text-slate-300 text-sm mt-2 leading-relaxed">
-          Pencatatan pengeluaran, pemasukan & portofolio investasi khusus untuk <span class="text-white font-semibold">Kevin</span> & <span class="text-white font-semibold">Vivie</span>.
+          Pencatatan pengeluaran, pemasukan &amp; portofolio investasi khusus untuk <span class="text-white font-semibold">Kevin</span> &amp; <span class="text-white font-semibold">Vivie</span>.
         </p>
       </div>
 
       <form id="loginForm" onsubmit="event.preventDefault(); handleLogin();" class="bg-white text-slate-800 rounded-3xl p-6 shadow-xl space-y-4 my-6">
         <div>
           <h2 class="text-lg font-bold text-slate-900">Masuk ke Akun</h2>
-          <p class="text-xs text-slate-500 mt-0.5">Masukkan username & password Kevin atau Vivie</p>
+          <p class="text-xs text-slate-500 mt-0.5">Masukkan username &amp; password Kevin atau Vivie</p>
         </div>
 
         <div id="login-error" class="hidden bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3.5 py-2.5 rounded-xl">
@@ -388,7 +449,7 @@ function doPost(e) {
       </form>
 
       <div class="text-center pb-3">
-        <p class="text-[11px] text-slate-400">Dual-Sync Google Sheets (Planner & Invest) • Mobile View</p>
+        <p class="text-[11px] text-slate-400">Dual-Sync Google Sheets (Planner &amp; Invest) • Mobile View</p>
       </div>
     </div>
 
@@ -409,7 +470,7 @@ function doPost(e) {
                   <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Memuat...
                 </span>
               </div>
-              <p class="text-[11px] text-slate-400 mt-1" id="header-date">Jumat, 20 Nov 2026</p>
+              <p class="text-[11px] text-slate-400 mt-1" id="header-date">-</p>
             </div>
           </div>
 
@@ -598,7 +659,7 @@ function doPost(e) {
                   <div class="p-3 rounded-2xl border border-slate-200 bg-slate-50 peer-checked:bg-indigo-50 peer-checked:border-indigo-600 peer-checked:text-indigo-900 transition">
                     <div class="flex items-center justify-between">
                       <span class="text-xs font-extrabold">BBCA/IDR</span>
-                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">IDX (100 lbr)</span>
+                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">IDX (Lembar)</span>
                     </div>
                     <p class="text-[10px] text-slate-500 mt-1">Bank Central Asia</p>
                   </div>
@@ -618,10 +679,10 @@ function doPost(e) {
               <input type="hidden" id="inv-kode" value="BBCA/IDR" />
             </div>
 
-            <!-- 2. AMOUNT / LOT (Lot lembar) -->
+            <!-- 2. JUMLAH LEMBAR / UNIT -->
             <div>
-              <label for="inv-lot" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                2. Amount / Lot (Lot lembar)
+              <label for="inv-lot" id="inv-lot-label" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                2. Jumlah Lembar Saham
               </label>
               <input
                 type="number"
@@ -629,11 +690,11 @@ function doPost(e) {
                 step="any"
                 min="0"
                 id="inv-lot"
-                placeholder="Contoh: 70 atau 0.005"
+                placeholder="Contoh: 5000 (lembar)"
                 oninput="updateInvestPreview()"
                 class="w-full px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-lg font-extrabold text-slate-900 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
               />
-              <p id="inv-lot-helper" class="text-[11px] text-slate-400 mt-1">1 lot saham IDX = 100 lembar</p>
+              <p id="inv-lot-helper" class="text-[11px] text-slate-400 mt-1">Masukkan jumlah lembar saham langsung (Total Modal = Lembar × Average Buy)</p>
             </div>
 
             <!-- 3. PRICE WHEN BUY / AVERAGE BUY (Rp) -->
@@ -653,9 +714,9 @@ function doPost(e) {
                 />
               </div>
 
-              <!-- Preview Otomatis: Total Modal (Amount) = Total Lot × 100 (jika IDX) × Average Buy -->
+              <!-- Preview Otomatis: Total Modal (Amount) = Jumlah Lembar/Unit × Average Buy -->
               <div class="mt-2.5 p-3 rounded-2xl bg-indigo-50/80 border border-indigo-100 flex items-center justify-between">
-                <span id="inv-total-label" class="text-[11px] font-bold text-indigo-800">Total Value (Lot × 100 × Avg):</span>
+                <span id="inv-total-label" class="text-[11px] font-bold text-indigo-800">Total Modal (Lembar × Avg):</span>
                 <span id="inv-total-preview" class="text-sm font-extrabold text-indigo-950">Rp 0</span>
               </div>
             </div>
@@ -696,7 +757,7 @@ function doPost(e) {
 
             <div id="today-date-display" class="px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 flex items-center justify-between">
               <span>📅 Hari Ini</span>
-              <span id="today-date-label" class="text-indigo-600">20 Nov 2026</span>
+              <span id="today-date-label" class="text-indigo-600">-</span>
             </div>
 
             <div id="custom-date-box" class="hidden">
@@ -903,7 +964,7 @@ function doPost(e) {
                   Report 3 • Halaman 3/3
                 </span>
                 <h3 class="text-lg font-extrabold mt-2">Value Investment Today</h3>
-                <p class="text-[11px] text-slate-400" id="invest-price-source">Sumber harga: Google Finance API • 1 lot = 100 lbr (IDX)</p>
+                <p class="text-[11px] text-slate-400" id="invest-price-source">Sumber harga: Apps Script &amp; Market API • Per lembar / unit</p>
               </div>
 
               <button
@@ -922,7 +983,7 @@ function doPost(e) {
                 <p id="inv-summary-current" class="text-base font-extrabold text-white mt-0.5">Rp 0</p>
               </div>
               <div>
-                <p class="text-[10px] font-semibold text-slate-400 uppercase">Total Value / Modal</p>
+                <p class="text-[10px] font-semibold text-slate-400 uppercase">Total Modal Beli</p>
                 <p id="inv-summary-modal" class="text-base font-extrabold text-slate-300 mt-0.5">Rp 0</p>
               </div>
               <div class="col-span-2 bg-white/5 rounded-2xl p-3 flex items-center justify-between">
@@ -1121,7 +1182,7 @@ function doPost(e) {
         </div>
 
         <p class="text-xs text-slate-600 leading-relaxed">
-          Pembacaan data otomatis berjalan lewat <strong>Google Sheets API (gviz)</strong> untuk sheet <strong>Planner</strong> &amp; <strong>Invest</strong>. Untuk menyimpan transaksi baru &amp; harga <code>GOOGLEFINANCE</code> langsung ke Sheet, tempelkan URL Web App Apps Script di bawah:
+          Sinkronisasi utama berjalan melalui <strong>Google Apps Script Web App</strong> untuk sheet <strong>Planner</strong> &amp; <strong>Invest</strong> (dengan fallback otomatis ke <strong>Google Sheets gviz</strong>).
         </p>
 
         <div>
@@ -1183,8 +1244,9 @@ function doPost(e) {
     // =========================================================================
     const SPREADSHEET_ID = "18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI";
     const PLANNER_SHEET_NAME = "Planner";
+    const FALLBACK_SHEET_NAME = "Sheet1";
     const INVEST_SHEET_NAME = "Invest";
-    const DEFAULT_SCRIPT_URL = "";
+    const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyewqVq7M8Lf7KPkRbmTMJdbtBjou6c37mxjFUQ4v1miVnrI4jzRcoAZ7aJzPkKirpY/exec";
 
     const DEFAULT_EXPENSE_CATEGORIES = [
       "FOOD",
@@ -1210,7 +1272,7 @@ function doPost(e) {
     let currentUser = null;
     let sheet1Transactions = []; // Planner: 7 kolom A:G
     let investTransactions = []; // Invest: 10 kolom A:J
-    let customCategories = [];
+    let customCategories = { Pengeluaran: [], Pemasukan: [] };
     let categoryReportType = "Pengeluaran";
     let historySubTab = "sheet1";
     let historyUserFilter = "ALL";
@@ -1224,12 +1286,22 @@ function doPost(e) {
       "BBCA/IDR": 0,
       "BTC/IDR": 0
     };
-    let priceSourceLabel = "Google Finance & Market API • 1 lot = 100 lbr (IDX)";
+    let priceSourceLabel = "Apps Script & Market API • Per lembar / unit";
 
-    function getUnitMultiplier(saham) {
+    function isCryptoAsset(saham) {
       const code = String(saham || "").trim().toUpperCase();
-      if (code.indexOf("BTC") !== -1 || code.indexOf("CRYPTO") !== -1) return 1;
-      return 100;
+      return code.indexOf("BTC") !== -1 || code.indexOf("CRYPTO") !== -1;
+    }
+
+    function getAssetUnitLabel(saham) {
+      return isCryptoAsset(saham) ? "unit" : "lembar";
+    }
+
+    function calculateInvestmentTotal(qty, avgPrice) {
+      const q = Number(qty) || 0;
+      const p = Number(avgPrice) || 0;
+      if (q <= 0 || p <= 0) return 0;
+      return Math.round(q * p);
     }
 
     // =========================================================================
@@ -1265,10 +1337,8 @@ function doPost(e) {
         if (tpl && preview) preview.textContent = tpl.value;
       } catch (e) {}
 
-      // Muat cache lokal secara aman
       loadLocalStateSafe();
 
-      // Pastikan screen awal langsung tampil (anti blank screen)
       try {
         const savedUser = (localStorage.getItem("kv_finance_user") || "").trim().toLowerCase();
         if (savedUser === "kevin") {
@@ -1290,6 +1360,32 @@ function doPost(e) {
       if (mainEl) mainEl.classList.add("hidden");
     }
 
+    function normalizeCustomCategoriesStore(raw) {
+      const result = { Pengeluaran: [], Pemasukan: [] };
+      if (!raw) return result;
+      if (Array.isArray(raw)) {
+        raw.forEach(function (cat) {
+          const upper = String(cat || "").trim().toUpperCase();
+          if (!upper) return;
+          if (DEFAULT_INCOME_CATEGORIES.indexOf(upper) !== -1 && DEFAULT_EXPENSE_CATEGORIES.indexOf(upper) === -1) {
+            if (result.Pemasukan.indexOf(upper) === -1) result.Pemasukan.push(upper);
+          } else {
+            if (result.Pengeluaran.indexOf(upper) === -1) result.Pengeluaran.push(upper);
+          }
+        });
+        return result;
+      }
+      if (typeof raw === "object") {
+        if (Array.isArray(raw.Pengeluaran)) {
+          result.Pengeluaran = Array.from(new Set(raw.Pengeluaran.map(function (c) { return String(c || "").trim().toUpperCase(); }).filter(Boolean)));
+        }
+        if (Array.isArray(raw.Pemasukan)) {
+          result.Pemasukan = Array.from(new Set(raw.Pemasukan.map(function (c) { return String(c || "").trim().toUpperCase(); }).filter(Boolean)));
+        }
+      }
+      return result;
+    }
+
     function loadLocalStateSafe() {
       try {
         const rawS1 = localStorage.getItem("kv_v3_planner") || localStorage.getItem("kv_v2_sheet1");
@@ -1302,10 +1398,9 @@ function doPost(e) {
           const parsedInv = JSON.parse(rawInv);
           if (Array.isArray(parsedInv)) investTransactions = parsedInv;
         }
-        const rawCats = localStorage.getItem("kv_v3_categories") || localStorage.getItem("kv_v2_categories");
+        const rawCats = localStorage.getItem("kv_v4_categories") || localStorage.getItem("kv_v3_categories") || localStorage.getItem("kv_v2_categories");
         if (rawCats) {
-          const parsedCats = JSON.parse(rawCats);
-          if (Array.isArray(parsedCats)) customCategories = parsedCats;
+          customCategories = normalizeCustomCategoriesStore(JSON.parse(rawCats));
         }
         const rawPrices = localStorage.getItem("kv_v3_prices") || localStorage.getItem("kv_v2_prices");
         if (rawPrices) {
@@ -1318,7 +1413,7 @@ function doPost(e) {
       } catch (err) {
         sheet1Transactions = [];
         investTransactions = [];
-        customCategories = [];
+        customCategories = { Pengeluaran: [], Pemasukan: [] };
       }
     }
 
@@ -1326,7 +1421,7 @@ function doPost(e) {
       try {
         localStorage.setItem("kv_v3_planner", JSON.stringify(sheet1Transactions));
         localStorage.setItem("kv_v3_invest", JSON.stringify(investTransactions));
-        localStorage.setItem("kv_v3_categories", JSON.stringify(customCategories));
+        localStorage.setItem("kv_v4_categories", JSON.stringify(customCategories));
         localStorage.setItem("kv_v3_prices", JSON.stringify(liveMarketPrices));
       } catch (err) {}
     }
@@ -1370,15 +1465,25 @@ function doPost(e) {
 
     function getScriptUrl() {
       try {
-        return (localStorage.getItem("kv_finance_script_url") || DEFAULT_SCRIPT_URL).trim();
+        const saved = localStorage.getItem("kv_finance_script_url");
+        if (saved && saved.trim()) return saved.trim();
+        return DEFAULT_SCRIPT_URL.trim();
       } catch (err) {
-        return DEFAULT_SCRIPT_URL;
+        return DEFAULT_SCRIPT_URL.trim();
       }
     }
 
     // =========================================================================
     // 3. LOGIN & AUTHENTICATION (Kevin / Kevin & Vivie / Vivie)
     // =========================================================================
+    function validateLoginCredentials(username, password) {
+      const rawUser = String(username || "").trim().toLowerCase();
+      const rawPass = String(password || "").trim().toLowerCase();
+      if (rawUser === "kevin" && rawPass === "kevin") return "Kevin";
+      if (rawUser === "vivie" && rawPass === "vivie") return "Vivie";
+      return null;
+    }
+
     function togglePasswordVisibility() {
       const pwdInput = document.getElementById("login-password");
       const btn = document.getElementById("toggle-pwd");
@@ -1407,12 +1512,10 @@ function doPost(e) {
         const passEl = document.getElementById("login-password");
         const errorBox = document.getElementById("login-error");
 
-        const rawUser = (userEl ? userEl.value : "").trim().toLowerCase();
-        const rawPass = (passEl ? passEl.value : "").trim().toLowerCase();
-
-        let canonicalUser = null;
-        if (rawUser === "kevin" && rawPass === "kevin") canonicalUser = "Kevin";
-        else if (rawUser === "vivie" && rawPass === "vivie") canonicalUser = "Vivie";
+        const canonicalUser = validateLoginCredentials(
+          userEl ? userEl.value : "",
+          passEl ? passEl.value : ""
+        );
 
         if (canonicalUser) {
           if (errorBox) errorBox.classList.add("hidden");
@@ -1458,23 +1561,58 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 4. DATE & NUMBER PARSERS (Mendukung Format Campuran Planner & gviz)
+    // 4. DATE & NUMBER PARSERS (Mendukung Format Campuran Planner, Invest & gviz)
     // =========================================================================
+    function parseNumberFlexible(val) {
+      if (typeof val === "number") return isFinite(val) ? val : 0;
+      if (val === null || val === undefined || String(val).trim() === "") return 0;
+
+      const str = String(val).trim().replace(/^rp\s*/i, "");
+      const cleaned = str.replace(/[^0-9.,-]/g, "");
+      if (!cleaned || cleaned === "-" || cleaned === "." || cleaned === ",") return 0;
+
+      let normalized = cleaned;
+      const hasComma = cleaned.indexOf(",") !== -1;
+      const hasDot = cleaned.indexOf(".") !== -1;
+
+      if (hasComma && hasDot) {
+        if (cleaned.lastIndexOf(",") > cleaned.lastIndexOf(".")) {
+          normalized = cleaned.replace(/\./g, "").replace(",", ".");
+        } else {
+          normalized = cleaned.replace(/,/g, "");
+        }
+      } else if (hasComma) {
+        const parts = cleaned.split(",");
+        const intDigits = parts[0].replace("-", "");
+        if (parts.length > 2) {
+          normalized = cleaned.replace(/,/g, "");
+        } else if (intDigits === "0" || parts[1].length !== 3 || intDigits.length > 3) {
+          normalized = parts[0] + "." + parts[1];
+        } else {
+          normalized = cleaned.replace(/,/g, "");
+        }
+      } else if (hasDot) {
+        const parts = cleaned.split(".");
+        const intDigits = parts[0].replace("-", "");
+        if (parts.length > 2) {
+          normalized = cleaned.replace(/\./g, "");
+        } else if (intDigits === "0" || parts[1].length !== 3 || intDigits.length > 3) {
+          normalized = cleaned;
+        } else {
+          normalized = cleaned.replace(/\./g, "");
+        }
+      }
+
+      const num = Number(normalized);
+      return isFinite(num) ? num : 0;
+    }
+
     function cleanNumericAmount(val) {
-      if (typeof val === "number") return isFinite(val) ? Math.round(val) : 0;
-      if (val === null || val === undefined) return 0;
-      let s = String(val).trim().replace(/^rp\s*/i, "");
-      s = s.replace(/[.,]00$/, "");
-      const digits = s.replace(/[^\d-]/g, "");
-      return Number(digits) || 0;
+      return Math.round(parseNumberFlexible(val));
     }
 
     function cleanFloatAmount(val) {
-      if (typeof val === "number") return isFinite(val) ? val : 0;
-      if (val === null || val === undefined) return 0;
-      const s = String(val).trim().replace(/,/g, "");
-      const num = parseFloat(s);
-      return isFinite(num) ? num : 0;
+      return parseNumberFlexible(val);
     }
 
     function parseFlexibleDateToISO(rawVal) {
@@ -1537,6 +1675,12 @@ function doPost(e) {
       return "";
     }
 
+    function extractGvizDateRaw(cell) {
+      if (!cell) return "";
+      if (cell.v && String(cell.v).indexOf("Date(") === 0) return cell.v;
+      return cell.f || cell.v || "";
+    }
+
     // =========================================================================
     // 5. DUAL-FETCH ENGINE (APPS SCRIPT PRIMARY + GVIZ PUBLIC FALLBACK)
     // =========================================================================
@@ -1596,9 +1740,9 @@ function doPost(e) {
 
     function parseGvizPlannerRows(rows) {
       const list = [];
-      rows.forEach(function (row) {
+      (rows || []).forEach(function (row) {
         const c = row.c || [];
-        const rawDateCell = c[0] ? (c[0].f || c[0].v || "") : "";
+        const rawDateCell = extractGvizDateRaw(c[0]);
         const rawTypeCell = c[1] ? String(c[1].v || c[1].f || "").trim() : "";
         const rawAmtCell = c[2] ? (c[2].v !== null && c[2].v !== undefined ? c[2].v : c[2].f) : 0;
         const rawKetCell = c[3] ? String(c[3].v || c[3].f || "").trim() : "";
@@ -1635,9 +1779,9 @@ function doPost(e) {
 
     function parseGvizInvestRows(rows) {
       const list = [];
-      rows.forEach(function (row) {
+      (rows || []).forEach(function (row) {
         const c = row.c || [];
-        const rawDateCell = c[0] ? (c[0].f || c[0].v || "") : "";
+        const rawDateCell = extractGvizDateRaw(c[0]);
         const rawTypeCell = c[1] ? String(c[1].v || c[1].f || "").trim() : "";
         const rawAmtCell = c[2] ? (c[2].v !== null && c[2].v !== undefined ? c[2].v : c[2].f) : 0;
         const rawLotCell = c[3] ? (c[3].v !== null && c[3].v !== undefined ? c[3].v : c[3].f) : 0;
@@ -1658,12 +1802,15 @@ function doPost(e) {
 
         const isoDate = parseFlexibleDateToISO(rawDateCell);
         const lot = cleanFloatAmount(rawLotCell);
-        const avgPrice = cleanNumericAmount(rawAvgCell);
+        let avgPrice = cleanNumericAmount(rawAvgCell);
         const saham = rawSahamCell.toUpperCase();
-        const mult = getUnitMultiplier(saham);
         let amount = cleanNumericAmount(rawAmtCell);
+
+        if (avgPrice === 0 && amount > 0 && lot > 0) {
+          avgPrice = Math.round(amount / lot);
+        }
         if (amount === 0 && lot > 0 && avgPrice > 0) {
-          amount = Math.round(lot * mult * avgPrice);
+          amount = calculateInvestmentTotal(lot, avgPrice);
         }
 
         if (!saham && lot === 0 && amount === 0) return;
@@ -1684,6 +1831,69 @@ function doPost(e) {
       return list;
     }
 
+    function normalizeApiTransactions(rows) {
+      if (!Array.isArray(rows)) return [];
+      return rows.map(function (r) {
+        const rawDate = r.tanggal !== undefined && r.tanggal !== "" ? r.tanggal : r.date;
+        const rawNominal = r.nominal !== undefined && r.nominal !== null ? r.nominal : r.amount;
+        return {
+          date: parseFlexibleDateToISO(rawDate),
+          type: String(r.type || "").toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
+          amount: cleanNumericAmount(rawNominal),
+          keterangan: String(r.keterangan || "").trim(),
+          kategori: String(r.kategori || "OTHER").trim().toUpperCase(),
+          user: String(r.user || "").trim(),
+          timestamp: String(r.timestamp || "").trim()
+        };
+      });
+    }
+
+    function normalizeApiInvestments(rows) {
+      if (!Array.isArray(rows)) return [];
+      return rows.map(function (r) {
+        const rawDate = r.tanggal !== undefined && r.tanggal !== "" ? r.tanggal : r.date;
+        const lot = cleanFloatAmount(r.lot !== undefined ? r.lot : r.lembar);
+        const rawAvg = r.avgBuy !== undefined && r.avgBuy !== null ? r.avgBuy : r.avgPrice;
+        let avgPrice = cleanNumericAmount(rawAvg);
+        const saham = String(r.saham || "").trim().toUpperCase();
+        let amount = cleanNumericAmount(r.amount !== undefined ? r.amount : r.nominal);
+
+        if (avgPrice === 0 && amount > 0 && lot > 0) {
+          avgPrice = Math.round(amount / lot);
+        }
+        if (amount === 0 && lot > 0 && avgPrice > 0) {
+          amount = calculateInvestmentTotal(lot, avgPrice);
+        }
+
+        return {
+          date: parseFlexibleDateToISO(rawDate),
+          type: "Invest",
+          amount: amount,
+          lot: lot,
+          avgPrice: avgPrice,
+          saham: saham,
+          keterangan: String(r.keterangan || "").trim(),
+          kategori: String(r.kategori || "INVEST").trim().toUpperCase(),
+          user: String(r.user || "").trim(),
+          timestamp: String(r.timestamp || "").trim()
+        };
+      });
+    }
+
+    function extractApiDataset(json) {
+      const txList = Array.isArray(json.data)
+        ? json.data
+        : Array.isArray(json.sheet1)
+          ? json.sheet1
+          : null;
+      const invList = Array.isArray(json.investments)
+        ? json.investments
+        : Array.isArray(json.invest)
+          ? json.invest
+          : null;
+      return { txList: txList, invList: invList };
+    }
+
     async function syncAllSheets(showNotification) {
       if (showNotification === undefined) showNotification = true;
       const btn = document.getElementById("btn-refresh-dash");
@@ -1696,47 +1906,23 @@ function doPost(e) {
       if (scriptUrl) {
         try {
           const res = await fetch(scriptUrl, { method: "GET", redirect: "follow" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
           const json = await res.json();
           if (json && json.status === "success") {
-            if (Array.isArray(json.sheet1)) {
-              sheet1Transactions = json.sheet1.map(function (r) {
-                return {
-                  date: parseFlexibleDateToISO(r.date),
-                  type: String(r.type || "").toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
-                  amount: cleanNumericAmount(r.amount),
-                  keterangan: String(r.keterangan || "").trim(),
-                  kategori: String(r.kategori || "OTHER").trim().toUpperCase(),
-                  user: String(r.user || "").trim(),
-                  timestamp: String(r.timestamp || "").trim()
-                };
-              });
+            const extracted = extractApiDataset(json);
+            if (extracted.txList) {
+              sheet1Transactions = normalizeApiTransactions(extracted.txList);
             }
-            if (Array.isArray(json.invest)) {
-              investTransactions = json.invest.map(function (r) {
-                const lot = cleanFloatAmount(r.lot);
-                const avgPrice = cleanNumericAmount(r.avgPrice);
-                const saham = String(r.saham || "").trim().toUpperCase();
-                const mult = getUnitMultiplier(saham);
-                let amount = cleanNumericAmount(r.amount);
-                if (amount === 0 && lot > 0 && avgPrice > 0) amount = Math.round(lot * mult * avgPrice);
-                return {
-                  date: parseFlexibleDateToISO(r.date),
-                  type: "Invest",
-                  amount: amount,
-                  lot: lot,
-                  avgPrice: avgPrice,
-                  saham: saham,
-                  keterangan: String(r.keterangan || "").trim(),
-                  kategori: String(r.kategori || "INVEST").trim().toUpperCase(),
-                  user: String(r.user || "").trim(),
-                  timestamp: String(r.timestamp || "").trim()
-                };
-              });
+            if (extracted.invList) {
+              investTransactions = normalizeApiInvestments(extracted.invList);
             }
             if (json.prices && typeof json.prices === "object") {
               if (Number(json.prices["BBCA/IDR"]) > 0) liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
               if (Number(json.prices["BTC/IDR"]) > 0) liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
-              priceSourceLabel = "Google Finance (Apps Script) • Update " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+              const updatedLabel = json.prices.updatedAt
+                ? json.prices.updatedAt
+                : new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+              priceSourceLabel = "Apps Script Market API • Update " + updatedLabel;
             }
             syncCategoriesFromData();
             saveLocalState();
@@ -1751,7 +1937,7 @@ function doPost(e) {
         }
       }
 
-      // 2. CADANGAN OTOMATIS (FALLBACK): Google Sheets Visualization API (gviz) -> Prioritas sheet 'Planner', fallback 'Sheet1'
+      // 2. CADANGAN OTOMATIS (FALLBACK): Google Sheets Visualization API (gviz) -> Prioritas 'Planner', fallback 'Sheet1'
       if (!fetchedSuccessfully) {
         try {
           let plannerRows = [];
@@ -1760,7 +1946,7 @@ function doPost(e) {
             plannerRows = await fetchGvizSheet(PLANNER_SHEET_NAME);
             plannerOk = true;
           } catch (ePlanner) {
-            plannerRows = await fetchGvizSheet("Sheet1");
+            plannerRows = await fetchGvizSheet(FALLBACK_SHEET_NAME);
             plannerOk = true;
           }
 
@@ -1802,15 +1988,20 @@ function doPost(e) {
       }
 
       safeRenderAllUI();
-      await refreshInvestmentPrices(false);
+      if (!liveMarketPrices["BBCA/IDR"] || !liveMarketPrices["BTC/IDR"]) {
+        await refreshInvestmentPrices(false);
+      }
 
       if (btn) btn.classList.remove("opacity-50", "pointer-events-none");
     }
 
     function syncCategoriesFromData() {
       sheet1Transactions.forEach(function (row) {
-        if (row.kategori && customCategories.indexOf(row.kategori) === -1) {
-          customCategories.push(row.kategori);
+        const cat = String(row.kategori || "").trim().toUpperCase();
+        if (!cat) return;
+        const bucket = row.type === "Pemasukan" ? "Pemasukan" : "Pengeluaran";
+        if (customCategories[bucket].indexOf(cat) === -1) {
+          customCategories[bucket].push(cat);
         }
       });
     }
@@ -1842,7 +2033,10 @@ function doPost(e) {
 
     function saveScriptUrl() {
       const val = document.getElementById("script-url-input").value.trim();
-      try { localStorage.setItem("kv_finance_script_url", val); } catch (e) {}
+      try {
+        if (val) localStorage.setItem("kv_finance_script_url", val);
+        else localStorage.removeItem("kv_finance_script_url");
+      } catch (e) {}
       closeSettingsModal();
       syncAllSheets(true);
     }
@@ -1852,8 +2046,20 @@ function doPost(e) {
       const code = tpl ? tpl.value : "";
       if (!code) return;
 
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(function () {
+          showToast("Kode Apps Script berhasil disalin!", "📋");
+        }).catch(function () {
+          fallbackCopyText(code);
+        });
+      } else {
+        fallbackCopyText(code);
+      }
+    }
+
+    function fallbackCopyText(text) {
       const textarea = document.createElement("textarea");
-      textarea.value = code;
+      textarea.value = text;
       textarea.style.position = "fixed";
       textarea.style.opacity = "0";
       document.body.appendChild(textarea);
@@ -1862,11 +2068,7 @@ function doPost(e) {
         document.execCommand("copy");
         showToast("Kode Apps Script berhasil disalin!", "📋");
       } catch (err) {
-        if (navigator.clipboard) {
-          navigator.clipboard.writeText(code).then(function () {
-            showToast("Kode Apps Script berhasil disalin!", "📋");
-          });
-        }
+        showToast("Gagal menyalin otomatis, silakan salin manual", "⚠️");
       }
       document.body.removeChild(textarea);
     }
@@ -1891,16 +2093,18 @@ function doPost(e) {
 
       try {
         const res = await fetch(inputUrl, { method: "GET", redirect: "follow" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
         const json = await res.json();
         if (json && json.status === "success") {
           try { localStorage.setItem("kv_finance_script_url", inputUrl); } catch (e) {}
-          const s1Count = Array.isArray(json.sheet1) ? json.sheet1.length : 0;
-          const invCount = Array.isArray(json.invest) ? json.invest.length : 0;
+          const extracted = extractApiDataset(json);
+          const s1Count = extracted.txList ? extracted.txList.length : 0;
+          const invCount = extracted.invList ? extracted.invList.length : 0;
           resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
           resultBox.textContent = "✅ Terhubung! Planner: " + s1Count + " baris, Invest: " + invCount + " baris.";
           await syncAllSheets(false);
         } else {
-          throw new Error("Respon tidak valid");
+          throw new Error((json && json.message) || "Respon tidak valid");
         }
       } catch (err) {
         resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200";
@@ -1971,25 +2175,33 @@ function doPost(e) {
 
     function updateInvestPreview() {
       const saham = (document.getElementById("inv-kode").value || "BBCA/IDR").trim().toUpperCase();
-      const mult = getUnitMultiplier(saham);
-      const lotVal = cleanFloatAmount(document.getElementById("inv-lot").value);
+      const isCrypto = isCryptoAsset(saham);
+      const qtyVal = cleanFloatAmount(document.getElementById("inv-lot").value);
       const priceVal = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
-      const totalModal = Math.round(lotVal * mult * priceVal);
+      const totalModal = calculateInvestmentTotal(qtyVal, priceVal);
+
+      const qtyLabelEl = document.getElementById("inv-lot-label");
+      if (qtyLabelEl) {
+        qtyLabelEl.textContent = isCrypto ? "2. Jumlah Unit Kripto" : "2. Jumlah Lembar Saham";
+      }
+
+      const qtyInputEl = document.getElementById("inv-lot");
+      if (qtyInputEl) {
+        qtyInputEl.placeholder = isCrypto ? "Contoh: 0.005 (BTC)" : "Contoh: 5000 (lembar)";
+      }
 
       const helperEl = document.getElementById("inv-lot-helper");
       if (helperEl) {
-        helperEl.textContent =
-          mult === 100
-            ? "1 lot saham IDX = 100 lembar (Total Value = Lot × 100 × Average Buy)"
-            : "Unit kripto langsung (Total Value = Unit × Average Buy)";
+        helperEl.textContent = isCrypto
+          ? "Masukkan jumlah unit kripto langsung (Total Modal = Unit × Average Buy)"
+          : "Masukkan jumlah lembar saham langsung (Total Modal = Lembar × Average Buy)";
       }
 
       const labelEl = document.getElementById("inv-total-label");
       if (labelEl) {
-        labelEl.textContent =
-          mult === 100
-            ? "Total Value (Lot × 100 × Avg):"
-            : "Total Value (Unit × Avg):";
+        labelEl.textContent = isCrypto
+          ? "Total Modal (Unit × Avg):"
+          : "Total Modal (Lembar × Avg):";
       }
 
       const previewEl = document.getElementById("inv-total-preview");
@@ -2030,13 +2242,15 @@ function doPost(e) {
       return getTodayISO();
     }
 
-    function getAllAvailableCategories() {
-      const type = getSelectedType();
-      const base = type === "Pengeluaran" ? DEFAULT_EXPENSE_CATEGORIES : DEFAULT_INCOME_CATEGORIES;
+    function getAllAvailableCategories(typeOverride) {
+      const type = typeOverride || getSelectedType();
+      const bucket = type === "Pemasukan" ? "Pemasukan" : "Pengeluaran";
+      const base = bucket === "Pemasukan" ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      const customForType = Array.isArray(customCategories[bucket]) ? customCategories[bucket] : [];
       const fromPlanner = sheet1Transactions
-        .filter(function (t) { return t.type === type && t.kategori; })
-        .map(function (t) { return t.kategori.toUpperCase(); });
-      return Array.from(new Set(base.concat(customCategories, fromPlanner)));
+        .filter(function (t) { return t.type === bucket && t.kategori; })
+        .map(function (t) { return String(t.kategori).trim().toUpperCase(); });
+      return Array.from(new Set(base.concat(customForType, fromPlanner)));
     }
 
     function refreshCategoryDropdown(selectedCat) {
@@ -2045,7 +2259,12 @@ function doPost(e) {
       if (!select || !chipsContainer) return;
 
       const categories = getAllAvailableCategories();
-      const previousValue = selectedCat || select.value || categories[0];
+      const previousValue =
+        selectedCat && categories.indexOf(selectedCat) !== -1
+          ? selectedCat
+          : select.value && categories.indexOf(select.value) !== -1
+            ? select.value
+            : categories[0];
 
       select.innerHTML = "";
       chipsContainer.innerHTML = "";
@@ -2093,8 +2312,9 @@ function doPost(e) {
         showToast("Masukkan nama kategori terlebih dahulu", "⚠️");
         return;
       }
-      if (customCategories.indexOf(newCat) === -1) {
-        customCategories.push(newCat);
+      const bucket = getSelectedType() === "Pemasukan" ? "Pemasukan" : "Pengeluaran";
+      if (customCategories[bucket].indexOf(newCat) === -1) {
+        customCategories[bucket].push(newCat);
         saveLocalState();
       }
       input.value = "";
@@ -2126,6 +2346,49 @@ function doPost(e) {
       document.getElementById("tx-nominal").value = "";
     }
 
+    function buildInvestmentPayload(params) {
+      const saham = String(params.saham || "BBCA/IDR").trim().toUpperCase();
+      const lot = Number(params.lot) || 0;
+      const avgBuy = Math.round(Number(params.avgBuy) || 0);
+      const amount = calculateInvestmentTotal(lot, avgBuy);
+      const dateISO = String(params.date || "").trim();
+      const timestampWIB = String(params.timestamp || "").trim();
+      return {
+        targetSheet: INVEST_SHEET_NAME,
+        tanggal: dateISO,
+        date: dateISO,
+        type: "Invest",
+        amount: amount,
+        lot: lot,
+        avgBuy: avgBuy,
+        avgPrice: avgBuy,
+        saham: saham,
+        keterangan: String(params.keterangan || "").trim(),
+        kategori: "INVEST",
+        user: String(params.user || "").trim(),
+        timestamp: timestampWIB
+      };
+    }
+
+    function buildTransactionPayload(params) {
+      const dateISO = String(params.date || "").trim();
+      const timestampWIB = String(params.timestamp || "").trim();
+      const amount = Math.round(Number(params.amount) || 0);
+      const type = params.type === "Pemasukan" ? "Pemasukan" : "Pengeluaran";
+      return {
+        targetSheet: PLANNER_SHEET_NAME,
+        tanggal: dateISO,
+        date: dateISO,
+        type: type,
+        nominal: amount,
+        amount: amount,
+        keterangan: String(params.keterangan || "").trim(),
+        kategori: String(params.kategori || "OTHER").trim().toUpperCase(),
+        user: String(params.user || "").trim(),
+        timestamp: timestampWIB
+      };
+    }
+
     async function handleTransactionSubmit(e) {
       e.preventDefault();
       const type = getSelectedType();
@@ -2134,7 +2397,6 @@ function doPost(e) {
 
       const btn = document.getElementById("btn-submit-tx");
       const btnText = document.getElementById("submit-btn-text");
-      const originalText = btnText.textContent;
       btn.disabled = true;
       btnText.textContent = "Menyimpan...";
 
@@ -2142,40 +2404,32 @@ function doPost(e) {
 
       if (type === "Invest") {
         const saham = (document.getElementById("inv-kode").value || "BBCA/IDR").trim().toUpperCase();
-        const mult = getUnitMultiplier(saham);
         const lot = cleanFloatAmount(document.getElementById("inv-lot").value);
         const avgPrice = Number(String(document.getElementById("inv-avg-price").value || "").replace(/\D/g, "")) || 0;
         const note = document.getElementById("inv-note").value.trim();
 
         if (lot <= 0) {
-          showToast("Amount / Lot harus lebih dari 0", "⚠️");
+          showToast("Jumlah lembar / unit harus lebih dari 0", "⚠️");
           btn.disabled = false;
-          btnText.textContent = originalText;
+          handleTypeChange();
           return;
         }
         if (avgPrice <= 0) {
           showToast("Price When Buy / Average Buy harus lebih dari 0", "⚠️");
           btn.disabled = false;
-          btnText.textContent = originalText;
+          handleTypeChange();
           return;
         }
 
-        // Rumus: Total Lot x 100 (jika IDX) x Nilai Average Buy
-        const amount = Math.round(lot * mult * avgPrice);
-
-        payload = {
-          targetSheet: "Invest",
+        payload = buildInvestmentPayload({
           date: dateISO,
-          type: "Invest",
-          amount: amount,
           lot: lot,
-          avgPrice: avgPrice,
+          avgBuy: avgPrice,
           saham: saham,
           keterangan: note,
-          kategori: "INVEST",
           user: currentUser,
           timestamp: timestampWIB
-        };
+        });
 
         investTransactions.push(payload);
       } else {
@@ -2186,12 +2440,11 @@ function doPost(e) {
         if (amount <= 0) {
           showToast("Nominal harus lebih dari 0", "⚠️");
           btn.disabled = false;
-          btnText.textContent = originalText;
+          handleTypeChange();
           return;
         }
 
-        payload = {
-          targetSheet: PLANNER_SHEET_NAME,
+        payload = buildTransactionPayload({
           date: dateISO,
           type: type,
           amount: amount,
@@ -2199,7 +2452,7 @@ function doPost(e) {
           kategori: kategori,
           user: currentUser,
           timestamp: timestampWIB
-        };
+        });
 
         sheet1Transactions.push(payload);
       }
@@ -2209,12 +2462,17 @@ function doPost(e) {
       const scriptUrl = getScriptUrl();
       if (scriptUrl) {
         try {
-          await fetch(scriptUrl, {
+          const res = await fetch(scriptUrl, {
             method: "POST",
             redirect: "follow",
             headers: { "Content-Type": "text/plain;charset=utf-8" },
             body: JSON.stringify(payload)
           });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const json = await res.json();
+          if (json && json.status === "error") {
+            throw new Error(json.message || "Gagal menyimpan di Apps Script");
+          }
           showToast(
             type === "Invest"
               ? 'Tersimpan ke baris bawah sheet "Invest"!'
@@ -2222,7 +2480,7 @@ function doPost(e) {
             "✅"
           );
         } catch (err) {
-          showToast("Tersimpan di cache lokal (periksa Apps Script URL)", "⚠️");
+          showToast("Tersimpan lokal, gagal sync ke Sheet: " + err.message, "⚠️");
         }
       } else {
         showToast("Tersimpan lokal! Isi Apps Script URL di Pengaturan untuk auto-write Sheet", "ℹ️");
@@ -2241,7 +2499,6 @@ function doPost(e) {
       handleTypeChange();
 
       btn.disabled = false;
-      btnText.textContent = originalText;
 
       safeRenderAllUI();
     }
@@ -2275,6 +2532,12 @@ function doPost(e) {
 
     function formatRupiah(num) {
       return "Rp " + Math.round(Number(num) || 0).toLocaleString("id-ID");
+    }
+
+    function formatQty(num) {
+      return Number((Number(num) || 0).toFixed(6)).toLocaleString("id-ID", {
+        maximumFractionDigits: 6
+      });
     }
 
     function createSheet1ItemHTML(tx) {
@@ -2320,12 +2583,11 @@ function doPost(e) {
     }
 
     function createInvestItemHTML(inv) {
-      const formattedLot = Number((Number(inv.lot) || 0).toFixed(6)).toLocaleString("id-ID");
-      const mult = getUnitMultiplier(inv.saham);
+      const formattedQty = formatQty(inv.lot);
       const lot = Number(inv.lot) || 0;
-      const avg = Number(inv.avgPrice) || 0;
-      const totalVal = Number(inv.amount) > 0 ? Number(inv.amount) : Math.round(lot * mult * avg);
-      const unitLabel = mult === 100 ? "lot" : "unit";
+      const avg = Number(inv.avgPrice !== undefined ? inv.avgPrice : inv.avgBuy) || 0;
+      const totalVal = Number(inv.amount) > 0 ? Number(inv.amount) : calculateInvestmentTotal(lot, avg);
+      const unitLabel = getAssetUnitLabel(inv.saham);
 
       const userBadge = inv.user
         ? '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ' +
@@ -2350,7 +2612,7 @@ function doPost(e) {
         "</span>" +
         "</div>" +
         '<p class="text-xs font-bold text-slate-800 truncate">' +
-        formattedLot + " " + unitLabel + " @ " + formatRupiah(avg) +
+        formattedQty + " " + unitLabel + " @ " + formatRupiah(avg) +
         (inv.keterangan ? " • " + escapeHTML(inv.keterangan) : "") +
         "</p>" +
         "</div>" +
@@ -2366,12 +2628,33 @@ function doPost(e) {
     function renderRecentMiniList() {
       const container = document.getElementById("recent-mini-list");
       if (!container) return;
-      const latest = sheet1Transactions.slice().reverse().slice(0, 4);
-      if (latest.length === 0) {
-        container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi di Planner.</p>';
+
+      const combined = sheet1Transactions
+        .map(function (tx, idx) {
+          return { kind: "tx", item: tx, sortKey: (tx.timestamp || tx.date || "") + "_" + String(idx).padStart(6, "0") };
+        })
+        .concat(
+          investTransactions.map(function (inv, idx) {
+            return { kind: "invest", item: inv, sortKey: (inv.timestamp || inv.date || "") + "_" + String(idx).padStart(6, "0") };
+          })
+        )
+        .sort(function (a, b) {
+          return b.sortKey.localeCompare(a.sortKey);
+        })
+        .slice(0, 4);
+
+      if (combined.length === 0) {
+        container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>';
         return;
       }
-      container.innerHTML = latest.map(createSheet1ItemHTML).join("");
+
+      container.innerHTML = combined
+        .map(function (entry) {
+          return entry.kind === "invest"
+            ? createInvestItemHTML(entry.item)
+            : createSheet1ItemHTML(entry.item);
+        })
+        .join("");
     }
 
     function switchHistorySubTab(subTab) {
@@ -2452,43 +2735,68 @@ function doPost(e) {
       renderFullHistory();
     }
 
+    function filterHistoryItems(sourceList, subTab, filters) {
+      const f = filters || {};
+      const userFilter = f.user || "ALL";
+      const monthVal = f.month || "ALL";
+      const catVal = f.category || "ALL";
+      const searchVal = String(f.search || "").trim().toLowerCase();
+
+      let list = (sourceList || []).slice().reverse();
+      if (userFilter !== "ALL") {
+        list = list.filter(function (t) {
+          return String(t.user || "").toLowerCase() === userFilter.toLowerCase();
+        });
+      }
+      if (monthVal !== "ALL") {
+        list = list.filter(function (t) {
+          return t.date && t.date.startsWith(monthVal);
+        });
+      }
+      if (catVal !== "ALL") {
+        list = list.filter(function (t) {
+          const field = subTab === "invest" ? t.saham : t.kategori;
+          return String(field || "").toUpperCase() === catVal.toUpperCase();
+        });
+      }
+      if (searchVal) {
+        list = list.filter(function (t) {
+          if (subTab === "invest") {
+            return (
+              String(t.saham || "").toLowerCase().indexOf(searchVal) !== -1 ||
+              String(t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1
+            );
+          }
+          return (
+            String(t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1 ||
+            String(t.kategori || "").toLowerCase().indexOf(searchVal) !== -1
+          );
+        });
+      }
+      return list;
+    }
+
     function renderFullHistory() {
       const container = document.getElementById("full-history-list");
       const searchVal = (document.getElementById("hist-search-input").value || "").trim().toLowerCase();
       const monthVal = document.getElementById("hist-month-filter").value;
       const catVal = document.getElementById("hist-cat-filter").value;
 
+      const source = historySubTab === "sheet1" ? sheet1Transactions : investTransactions;
+      const list = filterHistoryItems(source, historySubTab, {
+        user: historyUserFilter,
+        month: monthVal,
+        category: catVal,
+        search: searchVal
+      });
+
       if (historySubTab === "sheet1") {
-        let list = sheet1Transactions.slice().reverse();
-        if (historyUserFilter !== "ALL") list = list.filter(function (t) { return t.user === historyUserFilter; });
-        if (monthVal !== "ALL") list = list.filter(function (t) { return t.date && t.date.startsWith(monthVal); });
-        if (catVal !== "ALL") list = list.filter(function (t) { return (t.kategori || "").toUpperCase() === catVal; });
-        if (searchVal) {
-          list = list.filter(function (t) {
-            return (
-              (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1 ||
-              (t.kategori || "").toLowerCase().indexOf(searchVal) !== -1
-            );
-          });
-        }
         document.getElementById("history-count-label").textContent = list.length + " transaksi (Planner)";
         container.innerHTML =
           list.length === 0
             ? '<div class="bg-white rounded-3xl p-8 text-center border border-slate-100"><p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p></div>'
             : list.map(createSheet1ItemHTML).join("");
       } else {
-        let list = investTransactions.slice().reverse();
-        if (historyUserFilter !== "ALL") list = list.filter(function (t) { return t.user === historyUserFilter; });
-        if (monthVal !== "ALL") list = list.filter(function (t) { return t.date && t.date.startsWith(monthVal); });
-        if (catVal !== "ALL") list = list.filter(function (t) { return (t.saham || "").toUpperCase() === catVal; });
-        if (searchVal) {
-          list = list.filter(function (t) {
-            return (
-              (t.saham || "").toLowerCase().indexOf(searchVal) !== -1 ||
-              (t.keterangan || "").toLowerCase().indexOf(searchVal) !== -1
-            );
-          });
-        }
         document.getElementById("history-count-label").textContent = list.length + " catatan investasi (Invest)";
         container.innerHTML =
           list.length === 0
@@ -2611,12 +2919,12 @@ function doPost(e) {
       renderCategoryReport();
     }
 
-    function renderDashboard() {
-      const selectedMonth = document.getElementById("dash-month-filter").value;
+    function computeMonthlySummary(transactions, selectedMonth) {
+      const monthFilter = selectedMonth || "ALL";
       const filteredTx =
-        selectedMonth === "ALL"
-          ? sheet1Transactions
-          : sheet1Transactions.filter(function (t) { return t.date && t.date.startsWith(selectedMonth); });
+        monthFilter === "ALL"
+          ? (transactions || [])
+          : (transactions || []).filter(function (t) { return t.date && t.date.startsWith(monthFilter); });
 
       let totalIncome = 0;
       let totalExpense = 0;
@@ -2627,31 +2935,10 @@ function doPost(e) {
       });
 
       const balance = totalIncome - totalExpense;
-      document.getElementById("kpi-income").textContent = formatRupiah(totalIncome);
-      document.getElementById("kpi-expense").textContent = formatRupiah(totalExpense);
-      document.getElementById("kpi-balance").textContent =
-        (balance < 0 ? "-" : "") + formatRupiah(Math.abs(balance));
+      const status = balance > 0 ? "Surplus" : balance < 0 ? "Defisit" : "Seimbang";
 
-      const statusBadge = document.getElementById("kpi-status-badge");
-      if (balance > 0) {
-        statusBadge.textContent = "Surplus";
-        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300";
-      } else if (balance < 0) {
-        statusBadge.textContent = "Defisit";
-        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300";
-      } else {
-        statusBadge.textContent = "Seimbang";
-        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300";
-      }
-
-      renderMonthlyReport();
-      renderCategoryReport();
-    }
-
-    function renderMonthlyReport() {
       const monthlyMap = {};
-
-      sheet1Transactions.forEach(function (tx) {
+      (transactions || []).forEach(function (tx) {
         if (!tx.date || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.date)) return;
         const ym = tx.date.substring(0, 7);
         if (!monthlyMap[ym]) monthlyMap[ym] = { income: 0, expense: 0 };
@@ -2660,6 +2947,73 @@ function doPost(e) {
       });
 
       const sortedMonths = Object.keys(monthlyMap).sort();
+      return {
+        totalIncome: totalIncome,
+        totalExpense: totalExpense,
+        balance: balance,
+        status: status,
+        monthlyMap: monthlyMap,
+        sortedMonths: sortedMonths
+      };
+    }
+
+    function computeCategorySummary(transactions, reportType, selectedMonth) {
+      const monthFilter = selectedMonth || "ALL";
+      const filteredTx = (transactions || []).filter(function (t) {
+        const matchType = t.type === reportType;
+        const matchMonth = monthFilter === "ALL" || (t.date && t.date.startsWith(monthFilter));
+        return matchType && matchMonth;
+      });
+
+      const catMap = {};
+      let grandTotal = 0;
+
+      filteredTx.forEach(function (tx) {
+        const cat = (tx.kategori || "OTHER").toUpperCase();
+        if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
+        catMap[cat].total += Number(tx.amount) || 0;
+        catMap[cat].count += 1;
+        grandTotal += Number(tx.amount) || 0;
+      });
+
+      const sortedCats = Object.entries(catMap).sort(function (a, b) {
+        return b[1].total - a[1].total;
+      });
+
+      return { catMap: catMap, sortedCats: sortedCats, grandTotal: grandTotal };
+    }
+
+    function renderDashboard() {
+      const selectedMonth = document.getElementById("dash-month-filter").value;
+      const summary = computeMonthlySummary(sheet1Transactions, selectedMonth);
+
+      document.getElementById("kpi-income").textContent = formatRupiah(summary.totalIncome);
+      document.getElementById("kpi-expense").textContent = formatRupiah(summary.totalExpense);
+      document.getElementById("kpi-balance").textContent =
+        (summary.balance < 0 ? "-" : "") + formatRupiah(Math.abs(summary.balance));
+
+      const statusBadge = document.getElementById("kpi-status-badge");
+      if (summary.balance > 0) {
+        statusBadge.textContent = "Surplus";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300";
+      } else if (summary.balance < 0) {
+        statusBadge.textContent = "Defisit";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300";
+      } else {
+        statusBadge.textContent = "Seimbang";
+        statusBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/20 text-indigo-300";
+      }
+
+      renderMonthlyReport(summary, selectedMonth);
+      renderCategoryReport();
+    }
+
+    function renderMonthlyReport(summaryArg, selectedMonthArg) {
+      const selectedMonth = selectedMonthArg || document.getElementById("dash-month-filter").value;
+      const summary = summaryArg || computeMonthlySummary(sheet1Transactions, selectedMonth);
+      const monthlyMap = summary.monthlyMap;
+      const sortedMonths = summary.sortedMonths;
+
       const labels = sortedMonths.map(formatShortMonthLabel);
       const incomeData = sortedMonths.map(function (m) { return monthlyMap[m].income; });
       const expenseData = sortedMonths.map(function (m) { return monthlyMap[m].expense; });
@@ -2716,12 +3070,17 @@ function doPost(e) {
       }
 
       const breakdownEl = document.getElementById("monthly-breakdown-list");
-      if (sortedMonths.length === 0) {
+      const displayMonths =
+        selectedMonth !== "ALL"
+          ? sortedMonths.filter(function (ym) { return ym === selectedMonth; })
+          : sortedMonths;
+
+      if (displayMonths.length === 0) {
         breakdownEl.innerHTML = '<p class="text-xs text-slate-400 text-center py-3">Belum ada data bulanan.</p>';
         return;
       }
 
-      breakdownEl.innerHTML = sortedMonths
+      breakdownEl.innerHTML = displayMonths
         .slice()
         .reverse()
         .map(function (ym) {
@@ -2747,26 +3106,9 @@ function doPost(e) {
 
     function renderCategoryReport() {
       const selectedMonth = document.getElementById("dash-month-filter").value;
-      const filteredTx = sheet1Transactions.filter(function (t) {
-        const matchType = t.type === categoryReportType;
-        const matchMonth = selectedMonth === "ALL" || (t.date && t.date.startsWith(selectedMonth));
-        return matchType && matchMonth;
-      });
-
-      const catMap = {};
-      let grandTotal = 0;
-
-      filteredTx.forEach(function (tx) {
-        const cat = (tx.kategori || "OTHER").toUpperCase();
-        if (!catMap[cat]) catMap[cat] = { total: 0, count: 0 };
-        catMap[cat].total += Number(tx.amount) || 0;
-        catMap[cat].count += 1;
-        grandTotal += Number(tx.amount) || 0;
-      });
-
-      const sortedCats = Object.entries(catMap).sort(function (a, b) {
-        return b[1].total - a[1].total;
-      });
+      const summary = computeCategorySummary(sheet1Transactions, categoryReportType, selectedMonth);
+      const sortedCats = summary.sortedCats;
+      const grandTotal = summary.grandTotal;
 
       const palette = [
         "#6366f1", "#f43f5e", "#10b981", "#f59e0b", "#06b6d4",
@@ -2785,7 +3127,9 @@ function doPost(e) {
             datasets: [
               {
                 data: sortedCats.length ? sortedCats.map(function (c) { return c[1].total; }) : [1],
-                backgroundColor: sortedCats.length ? palette : ["#e2e8f0"],
+                backgroundColor: sortedCats.length
+                  ? sortedCats.map(function (_, idx) { return palette[idx % palette.length]; })
+                  : ["#e2e8f0"],
                 borderWidth: 2,
                 borderColor: "#ffffff"
               }
@@ -2818,7 +3162,7 @@ function doPost(e) {
         .map(function (entry, idx) {
           const cat = entry[0];
           const info = entry[1];
-          const pct = grandTotal > 0 ? ((info.total / grandTotal) * 100).toFixed(1) : 0;
+          const pct = grandTotal > 0 ? ((info.total / grandTotal) * 100).toFixed(1) : "0.0";
           const color = palette[idx % palette.length];
           return (
             '<div class="space-y-1">' +
@@ -2843,8 +3187,58 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // 10. HALAMAN 3: VALUE INVESTMENT TODAY (Total Value = Total Lot x 100 x Avg)
+    // 10. HALAMAN 3: VALUE INVESTMENT TODAY (Langsung per Lembar / Unit)
     // =========================================================================
+    function computeAssetSummary(assetCode, transactions, marketPrice) {
+      const code = String(assetCode || "").trim().toUpperCase();
+      const assetTxs = (transactions || []).filter(function (t) {
+        return String(t.saham || "").trim().toUpperCase() === code;
+      });
+
+      let totalQty = 0;
+      let totalModal = 0;
+
+      assetTxs.forEach(function (t) {
+        const qty = Number(t.lot) || 0;
+        const avg = Number(t.avgPrice !== undefined ? t.avgPrice : t.avgBuy) || 0;
+        const modalTx = Number(t.amount) > 0 ? Number(t.amount) : qty * avg;
+        totalQty += qty;
+        totalModal += modalTx;
+      });
+
+      const avgPrice = totalQty > 0 ? totalModal / totalQty : 0;
+      const priceToday = Number(marketPrice) || 0;
+      const currentVal = priceToday > 0 ? totalQty * priceToday : totalModal;
+      const returnVal = totalQty > 0 && priceToday > 0 ? currentVal - totalModal : 0;
+      const returnPct = totalModal > 0 && priceToday > 0 ? (returnVal / totalModal) * 100 : 0;
+
+      return {
+        code: code,
+        totalQty: totalQty,
+        avgPrice: avgPrice,
+        totalModal: totalModal,
+        priceToday: priceToday,
+        currentVal: currentVal,
+        returnVal: returnVal,
+        returnPct: returnPct
+      };
+    }
+
+    function formatReturnDisplay(returnVal, returnPct) {
+      const isMinus = returnVal < 0;
+      const isPlus = returnVal > 0;
+      const sign = isMinus ? "-" : isPlus ? "+" : "";
+      const absPctStr = Math.abs(Number(returnPct) || 0).toFixed(2);
+      return {
+        isMinus: isMinus,
+        isPlus: isPlus,
+        sign: sign,
+        pctText: sign + absPctStr + "%",
+        amountText: sign + formatRupiah(Math.abs(returnVal)),
+        colorHex: isMinus ? "#EF4444" : isPlus ? "#10B981" : ""
+      };
+    }
+
     async function refreshInvestmentPrices(showToastFlag) {
       const btn = document.getElementById("btn-refresh-price");
       if (btn) {
@@ -2853,63 +3247,73 @@ function doPost(e) {
       }
 
       let updatedAny = false;
+      let refreshedViaScript = false;
 
       const scriptUrl = getScriptUrl();
       if (scriptUrl && showToastFlag) {
         try {
-          const res = await fetch(scriptUrl, { method: "GET", redirect: "follow" });
-          const json = await res.json();
-          if (json && json.prices) {
-            if (Number(json.prices["BBCA/IDR"]) > 0) {
-              liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+          const refreshUrl = scriptUrl + (scriptUrl.indexOf("?") === -1 ? "?refresh=1" : "&refresh=1");
+          const res = await fetch(refreshUrl, { method: "GET", redirect: "follow" });
+          if (res.ok) {
+            const json = await res.json();
+            if (json && json.prices) {
+              if (Number(json.prices["BBCA/IDR"]) > 0) {
+                liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+                updatedAny = true;
+                refreshedViaScript = true;
+              }
+              if (Number(json.prices["BTC/IDR"]) > 0) {
+                liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
+                updatedAny = true;
+                refreshedViaScript = true;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (!refreshedViaScript || liveMarketPrices["BTC/IDR"] <= 0) {
+        try {
+          const btcRes = await fetch("https://api.coinbase.com/v2/prices/BTC-IDR/spot");
+          const btcJson = await btcRes.json();
+          const btcSpot = Number(btcJson && btcJson.data && btcJson.data.amount);
+          if (btcSpot > 0) {
+            liveMarketPrices["BTC/IDR"] = Math.round(btcSpot);
+            updatedAny = true;
+          }
+        } catch (e) {
+          try {
+            const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr");
+            const cgJson = await cgRes.json();
+            const cgPrice = Number(cgJson && cgJson.bitcoin && cgJson.bitcoin.idr);
+            if (cgPrice > 0) {
+              liveMarketPrices["BTC/IDR"] = Math.round(cgPrice);
               updatedAny = true;
             }
-            if (Number(json.prices["BTC/IDR"]) > 0) {
-              liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
+          } catch (err2) {}
+        }
+      }
+
+      if (!refreshedViaScript || liveMarketPrices["BBCA/IDR"] <= 0) {
+        try {
+          const yahooUrl = encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d");
+          const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
+          const bbcaWrapper = await bbcaRes.json();
+          if (bbcaWrapper && bbcaWrapper.contents) {
+            const parsedYahoo = JSON.parse(bbcaWrapper.contents);
+            const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
+            const marketPrice = Number((meta && (meta.regularMarketPrice || meta.chartPreviousClose || meta.previousClose)) || 0);
+            if (marketPrice > 0) {
+              liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
               updatedAny = true;
             }
           }
         } catch (e) {}
       }
 
-      try {
-        const btcRes = await fetch("https://api.coinbase.com/v2/prices/BTC-IDR/spot");
-        const btcJson = await btcRes.json();
-        const btcSpot = Number(btcJson && btcJson.data && btcJson.data.amount);
-        if (btcSpot > 0) {
-          liveMarketPrices["BTC/IDR"] = Math.round(btcSpot);
-          updatedAny = true;
-        }
-      } catch (e) {
-        try {
-          const cgRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr");
-          const cgJson = await cgRes.json();
-          const cgPrice = Number(cgJson && cgJson.bitcoin && cgJson.bitcoin.idr);
-          if (cgPrice > 0) {
-            liveMarketPrices["BTC/IDR"] = Math.round(cgPrice);
-            updatedAny = true;
-          }
-        } catch (err2) {}
-      }
-
-      try {
-        const yahooUrl = encodeURIComponent("https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=1d");
-        const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
-        const bbcaWrapper = await bbcaRes.json();
-        if (bbcaWrapper && bbcaWrapper.contents) {
-          const parsedYahoo = JSON.parse(bbcaWrapper.contents);
-          const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
-          const marketPrice = Number(meta && meta.regularMarketPrice);
-          if (marketPrice > 0) {
-            liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
-            updatedAny = true;
-          }
-        }
-      } catch (e) {}
-
       const timeNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
       if (updatedAny) {
-        priceSourceLabel = "Google Finance & Market API • Update " + timeNow + " (1 lot = 100 lbr)";
+        priceSourceLabel = "Apps Script & Market API • Update " + timeNow;
         saveLocalState();
         if (showToastFlag) showToast("Harga BBCA/IDR & BTC/IDR diperbarui!", "📈");
       } else if (showToastFlag) {
@@ -2939,18 +3343,19 @@ function doPost(e) {
     }
 
     function saveManualPrice() {
-      if (!editingManualAssetCode) return;
+      const targetCode = editingManualAssetCode;
+      if (!targetCode) return;
       const val = Number(String(document.getElementById("manual-price-input").value || "").replace(/\D/g, "")) || 0;
       if (val <= 0) {
         showToast("Masukkan harga yang valid (> 0)", "⚠️");
         return;
       }
-      liveMarketPrices[editingManualAssetCode] = val;
-      priceSourceLabel = "Harga Manual • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " (1 lot = 100 lbr)";
+      liveMarketPrices[targetCode] = val;
+      priceSourceLabel = "Harga Manual • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
       saveLocalState();
       closeManualPriceEditor();
       renderInvestmentReport();
-      showToast("Harga " + editingManualAssetCode + " diperbarui!", "✅");
+      showToast("Harga " + targetCode + " diperbarui!", "✅");
     }
 
     function renderInvestmentReport() {
@@ -2958,8 +3363,8 @@ function doPost(e) {
       if (sourceEl) sourceEl.textContent = priceSourceLabel;
 
       const supportedAssets = [
-        { code: "BBCA/IDR", name: "Bank Central Asia (IDX:BBCA • 1 lot = 100 lbr)", badge: "SAHAM IDX", badgeClass: "bg-blue-100 text-blue-700" },
-        { code: "BTC/IDR", name: "Bitcoin Rupiah (BTC/IDR)", badge: "CRYPTO", badgeClass: "bg-amber-100 text-amber-700" }
+        { code: "BBCA/IDR", name: "Bank Central Asia (IDX:BBCA • per lembar)", badge: "SAHAM IDX", badgeClass: "bg-blue-100 text-blue-700" },
+        { code: "BTC/IDR", name: "Bitcoin Rupiah (BTC/IDR • per unit)", badge: "CRYPTO", badgeClass: "bg-amber-100 text-amber-700" }
       ];
 
       let grandModal = 0;
@@ -2969,63 +3374,22 @@ function doPost(e) {
       if (assetsContainer) {
         assetsContainer.innerHTML = supportedAssets
           .map(function (asset) {
-            const mult = getUnitMultiplier(asset.code);
-            const assetTxs = investTransactions.filter(function (t) {
-              return (t.saham || "").toUpperCase() === asset.code;
-            });
+            const stats = computeAssetSummary(asset.code, investTransactions, liveMarketPrices[asset.code]);
+            grandModal += stats.totalModal;
+            grandCurrent += stats.currentVal;
 
-            let totalLot = 0;
-            let weightedSum = 0;
-
-            assetTxs.forEach(function (t) {
-              const lot = Number(t.lot) || 0;
-              const avg = Number(t.avgPrice) || 0;
-              const modalTx = Number(t.amount) > 0 ? Number(t.amount) : lot * mult * avg;
-              totalLot += lot;
-              weightedSum += modalTx;
-            });
-
-            // Weighted Average Price per lembar/unit: total value / (totalLot * mult)
-            const avgPrice = totalLot > 0 && mult > 0 ? weightedSum / (totalLot * mult) : 0;
-
-            // Rumus Total Value / Modal: Total Lot x 100 (jika IDX) x Nilai Average
-            const totalModalCalc = totalLot * mult * avgPrice;
-
-            const priceToday = Number(liveMarketPrices[asset.code]) || 0;
-
-            // Nilai Hari Ini: Total Lot x 100 (jika IDX) x Price Today
-            const currentVal = priceToday > 0 ? totalLot * mult * priceToday : totalModalCalc;
-
-            // Return = Nilai Hari Ini - Total Value Modal
-            const returnVal = totalLot > 0 && priceToday > 0
-              ? currentVal - totalModalCalc
-              : 0;
-            const returnPct = totalModalCalc > 0 && priceToday > 0
-              ? ((returnVal / totalModalCalc) * 100).toFixed(2)
-              : "0.00";
-
-            grandModal += totalModalCalc;
-            grandCurrent += currentVal;
-
-            const isMinus = returnVal < 0;
-            const isPlus = returnVal > 0;
-            const returnColorStyle = isMinus
-              ? "color: #EF4444;"
-              : isPlus
-                ? "color: #10B981;"
-                : "";
-            const returnBadgeClass = isMinus
+            const retDisplay = formatReturnDisplay(stats.returnVal, stats.returnPct);
+            const returnColorStyle = retDisplay.colorHex ? "color: " + retDisplay.colorHex + ";" : "";
+            const returnBadgeClass = retDisplay.isMinus
               ? "bg-red-50 text-red-600 border-red-200"
-              : isPlus
+              : retDisplay.isPlus
                 ? "bg-emerald-50 text-emerald-600 border-emerald-200"
                 : "bg-slate-100 text-slate-600 border-slate-200";
-            const returnSign = isMinus ? "-" : isPlus ? "+" : "";
 
-            const formattedLot = Number(totalLot.toFixed(6)).toLocaleString("id-ID");
-            const unitLabel = mult === 100 ? "lot" : "unit";
-            const formulaNote = mult === 100
-              ? "Rumus: " + formattedLot + " lot × 100 × Avg"
-              : "Rumus: " + formattedLot + " unit × Avg";
+            const unitLabel = getAssetUnitLabel(asset.code);
+            const formattedQty = formatQty(stats.totalQty);
+            const qtyTitle = unitLabel === "lembar" ? "Total Lembar Dimiliki" : "Total Unit Dimiliki";
+            const formulaNote = "Rumus: " + formattedQty + " " + unitLabel + " × Avg";
 
             return (
               '<div class="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 space-y-3.5">' +
@@ -3038,39 +3402,39 @@ function doPost(e) {
               '<p class="text-[11px] text-slate-400 mt-0.5">' + asset.name + '</p>' +
               '</div>' +
               '<div class="px-2.5 py-1 rounded-xl border text-xs font-extrabold ' + returnBadgeClass + '">' +
-              returnSign + returnPct + '%' +
+              retDisplay.pctText +
               '</div>' +
               '</div>' +
 
               '<div class="grid grid-cols-2 gap-2.5 p-3 rounded-2xl bg-slate-50 border border-slate-100 text-xs">' +
               '<div>' +
-              '<p class="text-[10px] font-semibold text-slate-400 uppercase">Total ' + (mult === 100 ? 'Lot Dimiliki' : 'Unit Dimiliki') + '</p>' +
-              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formattedLot + ' ' + unitLabel + '</p>' +
+              '<p class="text-[10px] font-semibold text-slate-400 uppercase">' + qtyTitle + '</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formattedQty + ' ' + unitLabel + '</p>' +
               '</div>' +
               '<div>' +
               '<p class="text-[10px] font-semibold text-slate-400 uppercase">Average Price</p>' +
-              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(avgPrice) + '</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(stats.avgPrice) + '</p>' +
               '</div>' +
               '<div>' +
               '<div class="flex items-center justify-between">' +
               '<p class="text-[10px] font-semibold text-slate-400 uppercase">Price Today</p>' +
-              '<button type="button" onclick="openManualPriceEditor('' + asset.code + '')" class="text-[10px] font-bold text-indigo-600 hover:underline cursor-pointer">Edit</button>' +
+              '<button type="button" onclick="openManualPriceEditor(\'' + asset.code + '\')" class="text-[10px] font-bold text-indigo-600 hover:underline cursor-pointer">Edit</button>' +
               '</div>' +
-              '<p class="text-sm font-extrabold text-indigo-600 mt-0.5">' + (priceToday > 0 ? formatRupiah(priceToday) : 'Belum tersedia') + '</p>' +
+              '<p class="text-sm font-extrabold text-indigo-600 mt-0.5">' + (stats.priceToday > 0 ? formatRupiah(stats.priceToday) : 'Belum tersedia') + '</p>' +
               '</div>' +
               '<div>' +
               '<p class="text-[10px] font-semibold text-slate-400 uppercase">Nilai Hari Ini</p>' +
-              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(currentVal) + '</p>' +
+              '<p class="text-sm font-extrabold text-slate-900 mt-0.5">' + formatRupiah(stats.currentVal) + '</p>' +
               '</div>' +
               '</div>' +
 
               '<div class="flex items-center justify-between pt-1">' +
               '<div>' +
               '<p class="text-[10px] font-bold text-slate-400 uppercase">Return (Profit / Loss)</p>' +
-              '<p class="text-[10px] text-slate-400">Total Value: ' + formatRupiah(totalModalCalc) + ' • ' + formulaNote + '</p>' +
+              '<p class="text-[10px] text-slate-400">Modal: ' + formatRupiah(stats.totalModal) + ' • ' + formulaNote + '</p>' +
               '</div>' +
               '<p class="text-base font-extrabold text-slate-700" style="' + returnColorStyle + '">' +
-              returnSign + formatRupiah(Math.abs(returnVal)) +
+              retDisplay.amountText +
               '</p>' +
               '</div>' +
               '</div>'
@@ -3080,15 +3444,15 @@ function doPost(e) {
       }
 
       const grandReturn = grandCurrent - grandModal;
+      const grandPct = grandModal > 0 ? (grandReturn / grandModal) * 100 : 0;
+      const grandRetDisplay = formatReturnDisplay(grandReturn, grandPct);
+
       document.getElementById("inv-summary-current").textContent = formatRupiah(grandCurrent);
       document.getElementById("inv-summary-modal").textContent = formatRupiah(grandModal);
 
       const sumReturnEl = document.getElementById("inv-summary-return");
-      const isMinus = grandReturn < 0;
-      const isPlus = grandReturn > 0;
-      const sign = isMinus ? "-" : isPlus ? "+" : "";
-      sumReturnEl.textContent = sign + formatRupiah(Math.abs(grandReturn));
-      sumReturnEl.style.color = isMinus ? "#EF4444" : isPlus ? "#10B981" : "#e2e8f0";
+      sumReturnEl.textContent = grandRetDisplay.amountText;
+      sumReturnEl.style.color = grandRetDisplay.colorHex || "#e2e8f0";
 
       const invHistEl = document.getElementById("investment-history-list");
       if (invHistEl) {
@@ -3124,7 +3488,8 @@ function doPost(e) {
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
   </script>
 </body>
