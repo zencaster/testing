@@ -202,7 +202,7 @@
             <span class="text-lg">📊</span>
             <div>
               <p class="text-xs font-bold text-indigo-950">Hubungkan Google Sheet</p>
-              <p class="text-[11px] text-indigo-700">Tempel URL Apps Script agar otomatis masuk ke baris bawah Sheet.</p>
+              <p class="text-[11px] text-indigo-700">https://script.google.com/macros/s/AKfycbwU7x5YUQFCN4Uum8KNg4q0D8gosHchA8l5nNGhYk9W_FpeLQMfdQV0UiIqStvOPBf7/exec</p>
             </div>
           </div>
           <button type="button" onclick="openSettingsModal()" class="shrink-0 px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm">
@@ -490,6 +490,50 @@
           </a>
         </div>
 
+        <!-- Search & Filter Box -->
+        <div class="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-sm space-y-2.5">
+          <div class="relative">
+            <input
+              type="text"
+              id="hist-search-input"
+              oninput="renderFullHistory()"
+              placeholder="Cari keterangan atau kategori..."
+              class="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:bg-white focus:border-indigo-500"
+            />
+            <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+            </svg>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <select
+              id="hist-month-filter"
+              onchange="renderFullHistory()"
+              class="px-2.5 py-1.5 rounded-xl bg-slate-100 text-[11px] font-bold text-slate-700 focus:outline-none truncate"
+            >
+              <option value="ALL">Semua Bulan</option>
+            </select>
+
+            <select
+              id="hist-type-filter"
+              onchange="renderFullHistory()"
+              class="px-2.5 py-1.5 rounded-xl bg-slate-100 text-[11px] font-bold text-slate-700 focus:outline-none truncate"
+            >
+              <option value="ALL">Semua Tipe</option>
+              <option value="Pengeluaran">Pengeluaran</option>
+              <option value="Pemasukan">Pemasukan</option>
+            </select>
+
+            <select
+              id="hist-cat-filter"
+              onchange="renderFullHistory()"
+              class="px-2.5 py-1.5 rounded-xl bg-slate-100 text-[11px] font-bold text-slate-700 focus:outline-none truncate"
+            >
+              <option value="ALL">Semua Kategori</option>
+            </select>
+          </div>
+        </div>
+
         <!-- Filter User Pills -->
         <div class="flex gap-2 overflow-x-auto no-scrollbar">
           <button type="button" onclick="setHistoryUserFilter('ALL')" id="hist-user-ALL" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white">Semua</button>
@@ -568,21 +612,31 @@
             onclick="saveScriptUrl()"
             class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition"
           >
-            Simpan & Sinkronkan
+            Simpan & Sync
+          </button>
+          <button
+            type="button"
+            onclick="testGoogleSheetConnection()"
+            id="btn-test-conn"
+            class="px-3 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 transition"
+          >
+            Tes Koneksi
           </button>
           <a
             href="https://docs.google.com/spreadsheets/d/18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI/edit?gid=0#gid=0"
             target="_blank"
             rel="noopener noreferrer"
-            class="px-3.5 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 transition"
+            class="px-3 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 transition"
           >
-            Buka Sheet
+            Sheet ↗
           </a>
         </div>
 
+        <div id="conn-test-result" class="hidden text-[11px] font-semibold px-3 py-2 rounded-xl"></div>
+
         <div class="pt-2 border-t border-slate-100 space-y-2">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Salin ke Extensions &gt; Apps Script)</span>
+            <span class="text-[11px] font-bold text-slate-700">Kode Apps Script (Extensions &gt; Apps Script)</span>
             <button type="button" onclick="copyAppsScriptCode()" class="text-[11px] font-bold text-indigo-600 hover:underline">
               Salin Kode
             </button>
@@ -593,37 +647,63 @@ function getTargetSheet() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const sheet = ss.getSheets()[0];
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Tanggal','Type','Nominal','Keterangan','Kategori','User','Timestamp']);
+    sheet.appendRow(['Pengeluaran', 'Keterangan', 'Kategori', 'Date', 'Type', 'User']);
   }
   return sheet;
 }
 
 function doGet() {
   const sheet = getTargetSheet();
-  const data = sheet.getDataRange().getValues();
-  const rows = [];
-  for (let i = 1; i &lt; data.length; i++) {
-    if (!data[i][0] &amp;&amp; !data[i][2]) continue;
-    let d = data[i][0];
-    if (d instanceof Date) d = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    rows.push({
-      tanggal: String(d),
-      type: String(data[i][1] || 'Pengeluaran'),
-      nominal: Number(data[i][2]) || 0,
-      keterangan: String(data[i][3] || ''),
-      kategori: String(data[i][4] || 'OTHER'),
-      user: String(data[i][5] || '')
+  // getDisplayValues menjaga format teks 8 digit '01122025' &amp; menghindari pergeseran timezone
+  const rows = sheet.getDataRange().getDisplayValues();
+  const result = [];
+
+  for (let i = 1; i &lt; rows.length; i++) {
+    const r = rows[i];
+    if (!r[0] &amp;&amp; !r[1] &amp;&amp; !r[3]) continue;
+
+    // Kolom A=Nominal, B=Keterangan, C=Kategori, D=Date(ddmmyyyy), E=Type, F=User
+    const rawNominal = String(r[0] || '0').replace(/[.,]00$/, '').replace(/[^\d-]/g, '');
+    const nominal = Number(rawNominal) || 0;
+    const keterangan = String(r[1] || '').trim();
+    const kategori = String(r[2] || 'OTHER').trim().toUpperCase() || 'OTHER';
+    const dateRaw = String(r[3] || '').trim();
+    const typeRaw = String(r[4] || '').trim();
+    const type = typeRaw.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+    const user = String(r[5] || '').trim();
+
+    result.push({
+      nominal: nominal,
+      keterangan: keterangan,
+      kategori: kategori,
+      date: dateRaw,
+      type: type,
+      user: user
     });
   }
-  return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: rows })).setMimeType(ContentService.MimeType.JSON);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success', data: result }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function doPost(e) {
   const sheet = getTargetSheet();
   const p = JSON.parse(e.postData.contents);
-  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-  sheet.appendRow([p.tanggal, p.type, Number(p.nominal), p.keterangan, p.kategori, p.user, ts]);
-  return ContentService.createTextOutput(JSON.stringify({ status: 'success' })).setMimeType(ContentService.MimeType.JSON);
+
+  const nominal = Number(String(p.nominal || 0).replace(/[^\d-]/g, '')) || 0;
+  const keterangan = String(p.keterangan || '').trim();
+  const kategori = String(p.kategori || 'OTHER').trim().toUpperCase();
+  const dateStr = String(p.date || '').trim(); // Format ddmmyyyy (contoh: 20112026)
+  const type = p.type === 'Pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+  const user = String(p.user || '').trim();
+
+  // Urutan Kolom: [A: Nominal, B: Keterangan, C: Kategori, D: Date(ddmmyyyy), E: Type, F: User]
+  sheet.appendRow([nominal, keterangan, kategori, dateStr, type, user]);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success' }))
+    .setMimeType(ContentService.MimeType.JSON);
 }</pre>
         </div>
       </div>
@@ -739,10 +819,147 @@ function doPost(e) {
     function loadLocalState() {
       try {
         const savedTx = JSON.parse(localStorage.getItem("kv_finance_transactions") || "[]");
-        if (Array.isArray(savedTx)) transactions = savedTx;
+        if (Array.isArray(savedTx)) {
+          transactions = savedTx.map(normalizeTransactionRow).filter((t) => t.tanggal || t.nominal > 0);
+        }
       } catch (e) {
         transactions = [];
       }
+
+      try {
+        const savedCats = JSON.parse(localStorage.getItem("kv_finance_categories") || "[]");
+        if (Array.isArray(savedCats)) {
+          customCategories = Array.from(
+            new Set(savedCats.map((c) => String(c).trim().toUpperCase()).filter(Boolean))
+          );
+        }
+      } catch (e) {
+        customCategories = [];
+      }
+    }
+
+    // =========================================================================
+    // PARSER & NORMALIZER DATA GOOGLE SHEET (Kolom A..F)
+    // A: Nominal | B: Keterangan | C: Kategori | D: Date (ddmmyyyy) | E: Type | F: User
+    // =========================================================================
+    function parseNominalValue(val) {
+      if (typeof val === "number") return isFinite(val) ? Math.round(val) : 0;
+      if (val === null || val === undefined) return 0;
+      let s = String(val).trim().replace(/^rp\s*/i, "");
+      // Hapus akhiran desimal .00 atau ,00 jika ada
+      s = s.replace(/[.,]00$/, "");
+      // Bersihkan koma/titik ribuan
+      const digits = s.replace(/[^\d-]/g, "");
+      return Number(digits) || 0;
+    }
+
+    function parseSheetDateToISO(rawVal) {
+      if (!rawVal) return "";
+      let s = String(rawVal).trim();
+
+      // 1. Format 7 atau 8 digit ddmmyyyy (contoh: '01122025' atau '1122025')
+      if (/^\d{7,8}$/.test(s)) {
+        const padded = s.padStart(8, "0");
+        const dd = padded.slice(0, 2);
+        const mm = padded.slice(2, 4);
+        const yyyy = padded.slice(4, 8);
+        const mNum = parseInt(mm, 10);
+        const dNum = parseInt(dd, 10);
+        const yNum = parseInt(yyyy, 10);
+        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31 && yNum >= 2000) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+
+      // 2. Format YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        return s;
+      }
+
+      // 3. Format DD/MM/YYYY atau DD-MM-YYYY
+      const slashMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (slashMatch) {
+        const dd = slashMatch[1].padStart(2, "0");
+        const mm = slashMatch[2].padStart(2, "0");
+        const yyyy = slashMatch[3];
+        if (parseInt(mm, 10) >= 1 && parseInt(mm, 10) <= 12) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+
+      // 4. ISO Timestamp dari Google Sheets Date Object (konversi eksplisit ke Asia/Jakarta WIB)
+      if (s.includes("T") || s.includes("GMT") || s.includes("Z")) {
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) {
+          try {
+            const parts = new Intl.DateTimeFormat("en-US", {
+              timeZone: "Asia/Jakarta",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).formatToParts(d);
+            const y = parts.find((p) => p.type === "year")?.value;
+            const m = parts.find((p) => p.type === "month")?.value;
+            const day = parts.find((p) => p.type === "day")?.value;
+            if (y && m && day) return `${y}-${m}-${day}`;
+          } catch (e) {
+            // Fallback manual UTC+7 (WIB)
+            const wib = new Date(d.getTime() + 7 * 3600 * 1000);
+            return wib.toISOString().split("T")[0];
+          }
+        }
+      }
+
+      return "";
+    }
+
+    function formatISOToDDMMYYYY(isoDate) {
+      if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return "";
+      const [yyyy, mm, dd] = isoDate.split("-");
+      return `${dd}${mm}${yyyy}`;
+    }
+
+    function normalizeTransactionRow(raw) {
+      if (!raw || typeof raw !== "object") {
+        return { tanggal: "", date: "", type: "Pengeluaran", nominal: 0, keterangan: "", kategori: "OTHER", user: "" };
+      }
+
+      // Deteksi otomatis jika payload berasal dari Apps Script versi lama (Kolom A terbaca sbg tanggal)
+      const isLegacyShifted =
+        raw.tanggal &&
+        /^\d+$/.test(String(raw.tanggal).trim()) &&
+        String(raw.tanggal).trim().length !== 8 &&
+        raw.keterangan &&
+        /^\d{7,8}$/.test(String(raw.keterangan).trim());
+
+      if (isLegacyShifted) {
+        const iso = parseSheetDateToISO(raw.keterangan);
+        return {
+          tanggal: iso,
+          date: formatISOToDDMMYYYY(iso),
+          nominal: parseNominalValue(raw.tanggal),
+          keterangan: String(raw.type || "").trim(),
+          kategori: String(raw.kategori || "OTHER").trim().toUpperCase() || "OTHER",
+          type: String(raw.user || "").trim().toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran",
+          user: "",
+        };
+      }
+
+      const isoDate = parseSheetDateToISO(raw.date || raw.tanggal || raw.Date || "");
+      const rawType = String(raw.type || raw.Type || "").trim();
+      const type = rawType.toLowerCase() === "pemasukan" ? "Pemasukan" : "Pengeluaran";
+      const kategori = String(raw.kategori || raw.Kategori || "OTHER").trim().toUpperCase() || "OTHER";
+
+      return {
+        tanggal: isoDate,
+        date: formatISOToDDMMYYYY(isoDate) || String(raw.date || ""),
+        nominal: parseNominalValue(raw.nominal !== undefined ? raw.nominal : raw.Pengeluaran),
+        keterangan: String(raw.keterangan || raw.Keterangan || "").trim(),
+        kategori,
+        type,
+        user: String(raw.user || raw.User || "").trim(),
+      };
+    }
 
       try {
         const savedCats = JSON.parse(localStorage.getItem("kv_finance_categories") || "[]");
@@ -832,9 +1049,63 @@ function doPost(e) {
 
     function copyAppsScriptCode() {
       const code = document.getElementById("apps-script-preview").textContent;
-      navigator.clipboard.writeText(code).then(() => {
+      const textarea = document.createElement("textarea");
+      textarea.value = code;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
         showToast("Kode Apps Script berhasil disalin!", "📋");
-      });
+      } catch (err) {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(code).then(() => {
+            showToast("Kode Apps Script berhasil disalin!", "📋");
+          });
+        }
+      }
+      document.body.removeChild(textarea);
+    }
+
+    async function testGoogleSheetConnection() {
+      const inputUrl = document.getElementById("script-url-input").value.trim();
+      const resultBox = document.getElementById("conn-test-result");
+      const btn = document.getElementById("btn-test-conn");
+
+      if (!inputUrl) {
+        resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200";
+        resultBox.textContent = "Masukkan URL Web App terlebih dahulu.";
+        resultBox.classList.remove("hidden");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Menguji...";
+      resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-slate-100 text-slate-600";
+      resultBox.textContent = "Menghubungkan ke Google Sheet...";
+      resultBox.classList.remove("hidden");
+
+      try {
+        const res = await fetch(inputUrl);
+        const json = await res.json();
+        if (json.status === "success" && Array.isArray(json.data)) {
+          localStorage.setItem("kv_finance_script_url", inputUrl);
+          updateConnectionUI();
+          const normalized = json.data.map(normalizeTransactionRow);
+          resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
+          resultBox.textContent = `✅ Terhubung! Ditemukan ${normalized.length} baris transaksi di Google Sheet.`;
+          await syncFromGoogleSheet(false);
+        } else {
+          throw new Error("Format respon tidak sesuai");
+        }
+      } catch (err) {
+        resultBox.className = "text-[11px] font-semibold px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200";
+        resultBox.textContent = "❌ Gagal terhubung. Pastikan Web App di-deploy dengan akses 'Anyone'.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Tes Koneksi";
+      }
     }
 
     async function syncFromGoogleSheet(showNotification = true) {
@@ -848,20 +1119,21 @@ function doPost(e) {
         const res = await fetch(url);
         const json = await res.json();
         if (json.status === "success" && Array.isArray(json.data)) {
-          transactions = json.data;
-          // Extract unique categories from Google Sheet
-          json.data.forEach((row) => {
-            if (row.kategori && !customCategories.includes(row.kategori.toUpperCase())) {
-              customCategories.push(row.kategori.toUpperCase());
+          transactions = json.data.map(normalizeTransactionRow);
+          // Kumpulkan seluruh kategori unik dari data Google Sheet (trimmed & uppercase)
+          transactions.forEach((row) => {
+            if (row.kategori && !customCategories.includes(row.kategori)) {
+              customCategories.push(row.kategori);
             }
           });
           saveLocalState();
           refreshCategoryDropdown();
           populateMonthFilter();
+          populateHistoryFilters();
           renderRecentMiniList();
           renderDashboard();
           renderFullHistory();
-          if (showNotification) showToast("Data berhasil disinkronkan dari Sheet!", "✅");
+          if (showNotification) showToast(`Sinkronisasi berhasil (${transactions.length} data)!`, "✅");
         }
       } catch (err) {
         if (showNotification) showToast("Gagal mengambil data dari Google Sheet", "⚠️");
@@ -1008,10 +1280,11 @@ function doPost(e) {
 
       const newEntry = {
         tanggal,
+        date: formatISOToDDMMYYYY(tanggal), // Format ddmmyyyy (contoh: 20112026) untuk Kolom D Sheet
         type,
         nominal,
         keterangan,
-        kategori,
+        kategori: kategori.trim().toUpperCase(),
         user: currentUser,
       };
 
@@ -1038,6 +1311,256 @@ function doPost(e) {
         } catch (err) {
           showToast("Tersimpan lokal (cek koneksi Google Sheet)", "⚠️");
         }
+      } else {
+        showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
+      }
+
+      // Reset form (tetap pertahankan default radio Pengeluaran)
+      document.getElementById("tx-nominal").value = "";
+      document.getElementById("tx-keterangan").value = "";
+      document.querySelector('input[name="tx-type"][value="Pengeluaran"]').checked = true;
+      handleTypeChange();
+
+      btn.disabled = false;
+      btnText.textContent = originalText;
+
+      populateMonthFilter();
+      populateHistoryFilters();
+      renderRecentMiniList();
+    }
+
+    // =========================================================================
+    // 5. NAVIGASI TAB & RENDER RIWAYAT
+    // =========================================================================
+    function switchTab(tabName) {
+      const tabs = ["input", "dashboard", "history"];
+      tabs.forEach((t) => {
+        document.getElementById(`tab-${t}`).classList.add("hidden");
+        const navBtn = document.getElementById(`nav-${t}`);
+        navBtn.className =
+          "flex flex-col items-center gap-1 text-slate-400 hover:text-slate-600 font-semibold text-[11px] py-1 px-4 rounded-xl transition";
+      });
+
+      document.getElementById(`tab-${tabName}`).classList.remove("hidden");
+      const activeNav = document.getElementById(`nav-${tabName}`);
+      activeNav.className =
+        "flex flex-col items-center gap-1 text-indigo-600 font-bold text-[11px] py-1 px-4 rounded-xl transition";
+
+      if (tabName === "dashboard") {
+        populateMonthFilter();
+        renderDashboard();
+      } else if (tabName === "history") {
+        populateHistoryFilters();
+        renderFullHistory();
+      } else {
+        renderRecentMiniList();
+      }
+    }
+
+    function formatRupiah(num) {
+      return "Rp " + (Number(num) || 0).toLocaleString("id-ID");
+    }
+
+    function createTransactionItemHTML(tx) {
+      const isExpense = tx.type === "Pengeluaran";
+      const amountClass = isExpense ? "text-rose-600" : "text-emerald-600";
+      const sign = isExpense ? "-" : "+";
+      const userBadge = tx.user
+        ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+            tx.user === "Kevin"
+              ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+              : "bg-pink-50 text-pink-700 border-pink-100"
+          }">${escapeHTML(tx.user)}</span>`
+        : "";
+
+      return `
+        <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center flex-wrap gap-1.5 mb-1">
+              <span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-200/70 text-slate-700 uppercase">
+                ${escapeHTML(tx.kategori || "OTHER")}
+              </span>
+              ${userBadge}
+              <span class="text-[10px] text-slate-400">${escapeHTML(tx.tanggal || tx.date || "-")}</span>
+            </div>
+            <p class="text-xs font-bold text-slate-800 truncate">${escapeHTML(tx.keterangan || "-")}</p>
+          </div>
+          <div class="text-right shrink-0">
+            <p class="text-xs font-extrabold ${amountClass}">${sign}${formatRupiah(tx.nominal)}</p>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderRecentMiniList() {
+      const container = document.getElementById("recent-mini-list");
+      const latest = [...transactions].reverse().slice(0, 4);
+
+      if (latest.length === 0) {
+        container.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Belum ada transaksi tercatat.</p>`;
+        return;
+      }
+      container.innerHTML = latest.map(createTransactionItemHTML).join("");
+    }
+
+    function populateHistoryFilters() {
+      const monthSelect = document.getElementById("hist-month-filter");
+      const catSelect = document.getElementById("hist-cat-filter");
+      if (!monthSelect || !catSelect) return;
+
+      const prevMonth = monthSelect.value;
+      const prevCat = catSelect.value;
+
+      const months = new Set();
+      const cats = new Set();
+
+      transactions.forEach((tx) => {
+        if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
+          months.add(tx.tanggal.substring(0, 7));
+        }
+        if (tx.kategori) {
+          cats.add(tx.kategori.toUpperCase());
+        }
+      });
+
+      const sortedMonths = Array.from(months).sort();
+      monthSelect.innerHTML = '<option value="ALL">Semua Bulan</option>';
+      sortedMonths.forEach((ym) => {
+        const opt = document.createElement("option");
+        opt.value = ym;
+        opt.textContent = formatYearMonthLabel(ym);
+        monthSelect.appendChild(opt);
+      });
+      if (prevMonth && (prevMonth === "ALL" || sortedMonths.includes(prevMonth))) {
+        monthSelect.value = prevMonth;
+      }
+
+      const sortedCats = Array.from(cats).sort();
+      catSelect.innerHTML = '<option value="ALL">Semua Kategori</option>';
+      sortedCats.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c;
+        opt.textContent = c;
+        catSelect.appendChild(opt);
+      });
+      if (prevCat && (prevCat === "ALL" || sortedCats.includes(prevCat))) {
+        catSelect.value = prevCat;
+      }
+    }
+
+    function setHistoryUserFilter(userFilter) {
+      historyUserFilter = userFilter;
+      ["ALL", "Kevin", "Vivie"].forEach((u) => {
+        const btn = document.getElementById(`hist-user-${u}`);
+        btn.className =
+          u === userFilter
+            ? "px-3.5 py-1.5 rounded-full text-xs font-bold bg-slate-900 text-white"
+            : "px-3.5 py-1.5 rounded-full text-xs font-bold bg-white text-slate-600 border border-slate-200";
+      });
+      renderFullHistory();
+    }
+
+    function renderFullHistory() {
+      const container = document.getElementById("full-history-list");
+      const searchVal = (document.getElementById("hist-search-input")?.value || "").trim().toLowerCase();
+      const monthVal = document.getElementById("hist-month-filter")?.value || "ALL";
+      const typeVal = document.getElementById("hist-type-filter")?.value || "ALL";
+      const catVal = document.getElementById("hist-cat-filter")?.value || "ALL";
+
+      let list = [...transactions].reverse();
+
+      if (historyUserFilter !== "ALL") {
+        list = list.filter((t) => t.user === historyUserFilter);
+      }
+      if (monthVal !== "ALL") {
+        list = list.filter((t) => t.tanggal && t.tanggal.startsWith(monthVal));
+      }
+      if (typeVal !== "ALL") {
+        list = list.filter((t) => t.type === typeVal);
+      }
+      if (catVal !== "ALL") {
+        list = list.filter((t) => (t.kategori || "").toUpperCase() === catVal);
+      }
+      if (searchVal) {
+        list = list.filter(
+          (t) =>
+            (t.keterangan || "").toLowerCase().includes(searchVal) ||
+            (t.kategori || "").toLowerCase().includes(searchVal)
+        );
+      }
+
+      document.getElementById("history-count-label").textContent = `${list.length} transaksi ditampilkan`;
+
+      if (list.length === 0) {
+        container.innerHTML = `
+          <div class="bg-white rounded-3xl p-8 text-center border border-slate-100">
+            <p class="text-sm font-bold text-slate-600">Tidak ada transaksi ditemukan</p>
+            <p class="text-xs text-slate-400 mt-1">Coba ubah filter atau kata kunci pencarian.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = list.map(createTransactionItemHTML).join("");
+    }
+
+    // =========================================================================
+    // 6. DASHBOARD ANALYTICS & CHARTS
+    // =========================================================================
+    function populateMonthFilter() {
+      const select = document.getElementById("dash-month-filter");
+      const currentVal = select.value;
+      const months = new Set();
+
+      transactions.forEach((tx) => {
+        if (tx.tanggal && /^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) {
+          months.add(tx.tanggal.substring(0, 7)); // YYYY-MM
+        }
+      });
+
+      // Urutkan kronologis dari bulan paling awal ke terbaru
+      const sortedMonths = Array.from(months).sort();
+      select.innerHTML = '<option value="ALL">Semua Bulan</option>';
+      sortedMonths.forEach((ym) => {
+        const opt = document.createElement("option");
+        opt.value = ym;
+        opt.textContent = formatYearMonthLabel(ym);
+        select.appendChild(opt);
+      });
+
+      if (currentVal && (currentVal === "ALL" || sortedMonths.includes(currentVal))) {
+        select.value = currentVal;
+      }
+    }
+
+    function formatYearMonthLabel(ym) {
+      if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
+      const [y, m] = ym.split("-");
+      const monthNames = [
+        "Januari",
+        "Februari",
+        "Maret",
+        "April",
+        "Mei",
+        "Juni",
+        "Juli",
+        "Agustus",
+        "September",
+        "Oktober",
+        "November",
+        "Desember",
+      ];
+      const idx = parseInt(m, 10) - 1;
+      return `${monthNames[idx]} ${y}`;
+    }
+
+    function formatShortMonthLabel(ym) {
+      if (!ym || !/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return ym || "-";
+      const [y, m] = ym.split("-");
+      const shortNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+      const idx = parseInt(m, 10) - 1;
+      return `${shortNames[idx]} '${y.slice(2)}`;
+    }
       } else {
         showToast("Tersimpan! Hubungkan Sheet untuk auto-sync", "✅");
       }
@@ -1253,7 +1776,7 @@ function doPost(e) {
       const monthlyMap = {};
 
       transactions.forEach((tx) => {
-        if (!tx.tanggal || tx.tanggal.length < 7) return;
+        if (!tx.tanggal || !/^\d{4}-(0[1-9]|1[0-2])/.test(tx.tanggal)) return;
         const ym = tx.tanggal.substring(0, 7);
         if (!monthlyMap[ym]) {
           monthlyMap[ym] = { income: 0, expense: 0 };
@@ -1263,7 +1786,7 @@ function doPost(e) {
       });
 
       const sortedMonths = Object.keys(monthlyMap).sort();
-      const labels = sortedMonths.map(formatYearMonthLabel);
+      const labels = sortedMonths.map(formatShortMonthLabel);
       const incomeData = sortedMonths.map((m) => monthlyMap[m].income);
       const expenseData = sortedMonths.map((m) => monthlyMap[m].expense);
 
