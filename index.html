@@ -192,7 +192,7 @@
     .choice-btn.selected { border-color: var(--primary); background: rgba(56, 189, 248, 0.18); }
     .choice-btn span.icon { font-size: 1.8rem; }
     .choice-btn span.text { font-size: 0.8rem; }
-    .error-msg { color: var(--danger); font-size: 0.85rem; text-align: center; margin-top: 0.75rem; }
+    .error-msg { color: var(--danger); font-size: 0.85rem; text-align: center; margin-top: 0.75rem; line-height: 1.4; }
     .version-tag { text-align: center; font-size: 0.72rem; color: #475569; margin-top: 1.25rem; }
   </style>
 </head>
@@ -240,7 +240,7 @@
     <!-- SCREEN 3: ARENA PVP -->
     <div id="screen-game" class="hidden">
       <div class="top-bar">
-        <span>Room: <strong id="game-room-code">----</strong></span>
+        <span>Room: <strong id="game-room-code">----</strong> (Ronde <span id="round-num">1</span>)</span>
         <span id="conn-badge" class="status-pill">● Terhubung</span>
       </div>
 
@@ -294,28 +294,38 @@
       </button>
     </div>
 
-    <div class="version-tag">Versi 3.0 • HTTPS Realtime</div>
+    <div class="version-tag">Versi 4.0 • Firebase Realtime</div>
   </div>
 
-  <script>
-    const RELAY_BASE = 'https://ntfy.sh';
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getDatabase, ref, set, get, update, onValue, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+    // =========================================================================
+    // TEMPEL URL FIREBASE REALTIME DATABASE KAMU DI BAWAH INI:
+    // Contoh: "https://suit-pvp-abcde-default-rtdb.asia-southeast1.firebasedatabase.app"
+    const FIREBASE_DB_URL = "https://zencaster-8a7a0-default-rtdb.asia-southeast1.firebasedatabase.app/";
+    // =========================================================================
+
     const EMOJI = { batu: '✊', gunting: '✌️', kertas: '✋' };
     const LABEL = { batu: 'Batu', gunting: 'Gunting', kertas: 'Kertas' };
 
-    const myId = 'p_' + Math.random().toString(36).slice(2, 10);
-    let eventSource = null;
-    let channelUrl = '';
-    let sessionStart = 0;
+    let db = null;
+    if (FIREBASE_DB_URL.startsWith("https://")) {
+      const app = initializeApp({ databaseURL: FIREBASE_DB_URL });
+      db = getDatabase(app);
+    }
+
+    let unsubscribe = null;
+    let roomRef = null;
     let isHost = false;
     let roomCode = '';
     let myName = '';
-    let oppName = '';
-    let guestId = null;
+    let inArena = false;
+    let currentRound = 1;
+    let countedRound = 0;
     let myScore = 0;
     let oppScore = 0;
-    let myChoice = null;
-    let oppChoice = null;
-    let joinTimeout = null;
 
     const screenMenu = document.getElementById('screen-menu');
     const screenWait = document.getElementById('screen-wait');
@@ -345,37 +355,273 @@
       btnJoin.textContent = 'Join';
     }
 
-    function cleanup(notify = false) {
-      if (joinTimeout) { clearTimeout(joinTimeout); joinTimeout = null; }
-      if (notify && channelUrl) {
-        sendMsg({ type: 'LEAVE' });
+    async function leaveRoom(deleteData = true) {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      if (deleteData && roomRef) {
+        try { await remove(roomRef); } catch {}
       }
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      channelUrl = '';
-      guestId = null;
+      roomRef = null;
+      inArena = false;
+      currentRound = 1;
+      countedRound = 0;
       myScore = 0;
       oppScore = 0;
-      myChoice = null;
-      oppChoice = null;
       resetButtons();
     }
 
-    async function sendMsg(payload) {
-      if (!channelUrl) return;
+    function checkConfig() {
+      if (!db) {
+        showError('Konfigurasi belum diisi: ganti FIREBASE_DB_URL di file index.html dengan URL Realtime Database Firebase kamu.');
+        return false;
+      }
+      return true;
+    }
+
+    // 1. BUAT LOBBY (HOST)
+    btnCreate.addEventListener('click', async () => {
+      clearError();
+      if (!checkConfig()) return;
+
+      isHost = true;
+      myName = document.getElementById('player-name').value.trim() || 'Host';
+      roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+      btnCreate.disabled = true;
+      btnCreate.textContent = 'Membuat Lobby...';
+      btnJoin.disabled = true;
+
       try {
-        await fetch(channelUrl, {
-          method: 'POST',
-          body: JSON.stringify({ ...payload, senderId: myId, ts: Date.now() })
+        roomRef = ref(db, 'rooms/' + roomCode);
+        await set(roomRef, {
+          status: 'waiting',
+          hostName: myName,
+          guestName: '',
+          round: 1,
+          hostChoice: '',
+          guestChoice: '',
+          createdAt: Date.now()
         });
-      } catch (e) {
-        console.error('Gagal kirim pesan:', e);
+        onDisconnect(roomRef).remove();
+
+        document.getElementById('display-code').textContent = roomCode;
+        resetButtons();
+        showScreen(screenWait);
+        listenRoom();
+      } catch (err) {
+        await leaveRoom(false);
+        showError('Gagal terhubung ke Firebase: ' + err.message);
+      }
+    });
+
+    // 2. GABUNG LOBBY (GUEST)
+    btnJoin.addEventListener('click', async () => {
+      clearError();
+      if (!checkConfig()) return;
+
+      const code = document.getElementById('join-code').value.trim();
+      if (code.length !== 4) {
+        showError('Masukkan 4 digit kode lobby yang valid.');
+        return;
+      }
+
+      isHost = false;
+      roomCode = code;
+      myName = document.getElementById('player-name').value.trim() || 'Guest';
+
+      btnCreate.disabled = true;
+      btnJoin.disabled = true;
+      btnJoin.textContent = 'Menghubungkan...';
+
+      try {
+        roomRef = ref(db, 'rooms/' + roomCode);
+        const snap = await get(roomRef);
+
+        if (!snap.exists()) {
+          await leaveRoom(false);
+          showError('Lobby tidak ditemukan. Periksa kembali 4 digit kodenya.');
+          return;
+        }
+
+        const data = snap.val();
+        if (data.status !== 'waiting') {
+          await leaveRoom(false);
+          showError('Lobby sudah penuh (maksimal 1v1).');
+          return;
+        }
+
+        await update(roomRef, {
+          status: 'playing',
+          guestName: myName
+        });
+        onDisconnect(roomRef).remove();
+
+        resetButtons();
+        listenRoom();
+      } catch (err) {
+        await leaveRoom(false);
+        showError('Gagal bergabung ke lobby: ' + err.message);
+      }
+    });
+
+    // 3. SINKRONISASI REALTIME
+    function listenRoom() {
+      unsubscribe = onValue(roomRef, (snap) => {
+        if (!snap.exists()) {
+          if (inArena) {
+            const badge = document.getElementById('conn-badge');
+            badge.textContent = '● Terputus';
+            badge.style.background = 'rgba(239, 68, 68, 0.15)';
+            badge.style.color = 'var(--danger)';
+            setBanner('Lawan keluar dari lobby.', 'lose');
+            disableChoices(true);
+            document.getElementById('btn-next-round').classList.add('hidden');
+          }
+          return;
+        }
+
+        const data = snap.val();
+
+        if (data.status === 'playing' && !inArena) {
+          inArena = true;
+          myScore = 0;
+          oppScore = 0;
+          currentRound = data.round || 1;
+          countedRound = 0;
+
+          const badge = document.getElementById('conn-badge');
+          badge.textContent = '● Terhubung';
+          badge.style.background = 'rgba(34, 197, 94, 0.15)';
+          badge.style.color = 'var(--success)';
+
+          const oppName = isHost ? (data.guestName || 'Guest') : (data.hostName || 'Host');
+          document.getElementById('game-room-code').textContent = roomCode;
+          document.getElementById('label-me').textContent = myName + (isHost ? ' (Host)' : ' (Guest)');
+          document.getElementById('label-opp').textContent = oppName + (isHost ? ' (Guest)' : ' (Host)');
+          updateScoreboard();
+          showScreen(screenGame);
+        }
+
+        if (inArena) {
+          renderRoundState(data);
+        }
+      });
+    }
+
+    function renderRoundState(data) {
+      const round = data.round || 1;
+      currentRound = round;
+      document.getElementById('round-num').textContent = round;
+
+      const myChoice = isHost ? data.hostChoice : data.guestChoice;
+      const oppChoice = isHost ? data.guestChoice : data.hostChoice;
+
+      // Update tampilan pilihan sendiri
+      document.querySelectorAll('.choice-btn').forEach(b => {
+        b.classList.toggle('selected', b.dataset.choice === myChoice);
+      });
+
+      if (myChoice) {
+        disableChoices(true);
+        document.getElementById('my-hand').textContent = EMOJI[myChoice];
+        document.getElementById('my-hand-text').textContent = LABEL[myChoice];
+      } else {
+        disableChoices(false);
+        document.getElementById('my-hand').textContent = '❔';
+        document.getElementById('my-hand-text').textContent = 'Belum memilih';
+      }
+
+      // Jika kedua pemain sudah memilih -> buka hasil ronde
+      if (myChoice && oppChoice) {
+        document.getElementById('opp-hand').textContent = EMOJI[oppChoice];
+        document.getElementById('opp-hand-text').textContent = LABEL[oppChoice];
+
+        const won =
+          (myChoice === 'batu' && oppChoice === 'gunting') ||
+          (myChoice === 'gunting' && oppChoice === 'kertas') ||
+          (myChoice === 'kertas' && oppChoice === 'batu');
+
+        if (myChoice === oppChoice) {
+          setBanner('🤝 Hasil Seri!', 'draw');
+        } else if (won) {
+          setBanner('🎉 Kamu Menang Ronde Ini!', 'win');
+        } else {
+          setBanner('💀 Kamu Kalah Ronde Ini!', 'lose');
+        }
+
+        if (countedRound < round) {
+          countedRound = round;
+          if (myChoice !== oppChoice) {
+            if (won) myScore++;
+            else oppScore++;
+            updateScoreboard();
+          }
+        }
+
+        document.getElementById('btn-next-round').classList.remove('hidden');
+      } else {
+        document.getElementById('btn-next-round').classList.add('hidden');
+        if (oppChoice) {
+          document.getElementById('opp-hand').textContent = '✅';
+          document.getElementById('opp-hand-text').textContent = 'Sudah memilih!';
+        } else {
+          document.getElementById('opp-hand').textContent = '❔';
+          document.getElementById('opp-hand-text').textContent = 'Menunggu...';
+        }
+        setBanner(myChoice ? 'Menunggu lawan memilih gerakan...' : 'Pilih Batu, Gunting, atau Kertas!', '');
       }
     }
 
-    function openChannel(code, onOpenCallback) {
-      channelUrl = `${RELAY_BASE}/suit-pvp-id-v3-${code}`;
-      sessionStart = Date.now() - 2000;
-      let opened = false;
+    // 4. AKSI PEMAIN
+    document.querySelectorAll('.choice-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!roomRef) return;
+        disableChoices(true);
+        const field = isHost ? 'hostChoice' : 'guestChoice';
+        await update(roomRef, { [field]: btn.dataset.choice });
+      });
+    });
+
+    document.getElementById('btn-next-round').addEventListener('click', async () => {
+      if (!roomRef) return;
+      document.getElementById('btn-next-round').classList.add('hidden');
+      await update(roomRef, {
+        round: currentRound + 1,
+        hostChoice: '',
+        guestChoice: ''
+      });
+    });
+
+    function setBanner(text, type) {
+      const banner = document.getElementById('game-banner');
+      banner.textContent = text;
+      banner.className = 'banner' + (type ? ' ' + type : '');
+    }
+
+    function disableChoices(disabled) {
+      document.querySelectorAll('.choice-btn').forEach(b => b.disabled = disabled);
+    }
+
+    function updateScoreboard() {
+      document.getElementById('score-me').textContent = myScore;
+      document.getElementById('score-opp').textContent = oppScore;
+    }
+
+    document.getElementById('btn-copy').addEventListener('click', () => {
+      navigator.clipboard.writeText(roomCode);
+      const btn = document.getElementById('btn-copy');
+      btn.textContent = 'Tersalin!';
+      setTimeout(() => btn.textContent = 'Salin Kode', 1500);
+    });
+
+    document.getElementById('btn-cancel-wait').addEventListener('click', async () => {
+      await leaveRoom(true);
+      showScreen(screenMenu);
+    });
+
+    document.getElementById('btn-leave').addEventListener('click', async () => {
+      await leaveRoom(true);
+      showScreen(screenMenu);
+    });
+  </script>
+</body>
+</html>
