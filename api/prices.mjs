@@ -23,7 +23,7 @@ function getWibTimestamp() {
   }
 }
 
-export async function fetchBbcaPrice(fetchImpl = fetch) {
+async function fetchBbcaPrice(fetchImpl = fetch) {
   for (const url of YAHOO_ENDPOINTS) {
     try {
       const res = await fetchImpl(url, {
@@ -47,7 +47,7 @@ export async function fetchBbcaPrice(fetchImpl = fetch) {
   return { price: 0, source: '' };
 }
 
-export async function fetchBtcPrice(fetchImpl = fetch) {
+async function fetchBtcPrice(fetchImpl = fetch) {
   // 1. Indodax IDR spot market (fast, reliable, no strict global rate-limit)
   try {
     const res = await fetchImpl('https://indodax.com/api/ticker/btcidr', {
