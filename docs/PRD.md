@@ -156,9 +156,11 @@ Spreadsheet ID: `18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI`
 - **Request `POST`:** `Content-Type: text/plain;charset=utf-8` agar bebas CORS preflight:
   - Login: `{ action: 'login', username, password }` → `{ status: 'success', user: { username, badgeColor } }`
   - Ganti Password: `{ action: 'changePassword', username, currentPassword, newPassword }` → `{ status: 'success', message, updatedAt }`
-  - Simpan Budget: `{ action: 'saveBudget', kategori, limit }` → `{ status: 'success', saved: [...] }`
+  - Simpan Budget: `{ action: 'saveBudget', kategori, limit }` (limit `0` menghapus baris kategori) → `{ status: 'success', saved: [...] }`
   - Simpan/Update Target: `{ action: 'saveGoal', id, nama, target, terkumpul, targetDate }` → `{ status: 'success', goal: {...} }`
   - Hapus Target: `{ action: 'deleteGoal', id }` → `{ status: 'success', id }`
+  - Edit / Hapus Transaksi: `{ action: 'updateTransaction', match, tanggal, type, nominal, keterangan, kategori, user }` / `{ action: 'deleteTransaction', match }` → `{ status: 'success', ... }`
+  - Edit / Hapus Investasi: `{ action: 'updateInvestment', match, tanggal, saham, lot, avgBuy, amount, keterangan, user }` / `{ action: 'deleteInvestment', match }` → `{ status: 'success', ... }`
   - Simpan Transaksi / Investasi: mengirim key kanonik (`tanggal`, `nominal`, `avgBuy`) beserta alias kompatibilitas (`date`, `amount`, `avgPrice`).
 - **Deploy Apps Script:** Setiap mengubah `Code.gs`, klik **Deploy > Manage deployments > Edit (pensil) > Version: New version > Deploy** (akses: *Anyone*).
 - **Deploy Vercel:** Push ke repository GitHub → import di Vercel (Framework Preset: *Other*, tanpa build command).

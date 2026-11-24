@@ -14,12 +14,6 @@ function extractMainScript(html) {
   return appScript[1];
 }
 
-function extractEmbeddedGasTemplate(html) {
-  const match = html.match(/<textarea id="appsScriptTemplate"[^>]*>([\s\S]*?)<\/textarea>/i);
-  assert.ok(match, '#appsScriptTemplate textarea must exist in index.html');
-  return match[1];
-}
-
 function createMockElement(id = '') {
   return {
     id,
@@ -102,9 +96,9 @@ function loadFrontendContext() {
   vm.runInContext(scriptCode, sandbox, { filename: 'index.html#script' });
 
   const originalShowToast = sandbox.showToast;
-  sandbox.showToast = (msg, icon) => {
-    toasts.push({ msg, icon });
-    originalShowToast(msg, icon);
+  sandbox.showToast = (msg, icon, undoFn) => {
+    toasts.push({ msg, icon, hasUndo: typeof undoFn === 'function' });
+    originalShowToast(msg, icon, undoFn);
   };
 
   return { sandbox, elements, storage, toasts, getEl };
@@ -112,13 +106,14 @@ function loadFrontendContext() {
 
 describe('Frontend Application (index.html)', () => {
   describe('Syntax, Configuration & Copywriting', () => {
-    it('parses main <script> and embedded #appsScriptTemplate without SyntaxError', () => {
+    it('parses main <script> without SyntaxError and strips embedded Apps Script template & zoom locks', () => {
       const mainScript = extractMainScript(indexHtml);
       assert.doesNotThrow(() => new vm.Script(mainScript));
 
-      const gasTemplate = extractEmbeddedGasTemplate(indexHtml);
-      assert.doesNotThrow(() => new vm.Script(gasTemplate));
-      assert.ok(gasTemplate.includes("const TX_SHEET_NAME = 'Planner'"));
+      assert.ok(!indexHtml.includes('id="appsScriptTemplate"'), 'Embedded Code.gs textarea must be removed');
+      assert.ok(!indexHtml.includes('DEFAULT_USERS_SEED'), 'Default credentials seed must not appear in public HTML');
+      assert.ok(!indexHtml.includes('user-scalable=no'), 'Viewport must not block pinch-to-zoom');
+      assert.ok(indexHtml.includes('rel="icon"'), 'Inline favicon must exist to prevent 404');
     });
 
     it('hardcodes the published Apps Script Web App URL and auto-migrates deprecated URL in localStorage', () => {
@@ -369,7 +364,8 @@ describe('Frontend Application (index.html)', () => {
       assert.equal(bbcaProfit.returnVal, 2000000);
 
       const profitDisplay = sandbox.formatReturnDisplay(bbcaProfit.returnVal, bbcaProfit.returnPct);
-      assert.equal(profitDisplay.colorHex, '#10B981');
+      assert.equal(profitDisplay.colorHex, '#047857');
+      assert.equal(profitDisplay.darkColorHex, '#34D399');
       assert.equal(profitDisplay.pctText, '+4.17%');
 
       // BTC: 0.005 unit, modal 7,500,000. At price 1,400,000,000 => current 7,000,000 => return -500,000 (-6.67%)
@@ -379,7 +375,8 @@ describe('Frontend Application (index.html)', () => {
       assert.equal(btcLoss.returnVal, -500000);
 
       const lossDisplay = sandbox.formatReturnDisplay(btcLoss.returnVal, btcLoss.returnPct);
-      assert.equal(lossDisplay.colorHex, '#EF4444');
+      assert.equal(lossDisplay.colorHex, '#BE123C');
+      assert.equal(lossDisplay.darkColorHex, '#FB7185');
       assert.equal(lossDisplay.pctText, '-6.67%'); // MUST NOT be --6.67%!
       assert.ok(!lossDisplay.pctText.startsWith('--'));
     });
@@ -578,6 +575,107 @@ describe('Frontend Application (index.html)', () => {
 
       const streak = sandbox.computeLoggingStreak(txs, invs, '2026-11-20');
       assert.equal(streak, 3);
+    });
+  });
+
+  describe('Overhaul v2: Smart Bar Quantities, Date-DESC Sort, Offline Queue & In-App Edit/Delete + Undo', () => {
+    it('parses Smart Bar quantities without mistaking item count for nominal', () => {
+      const { sandbox } = loadFrontendContext();
+      const parsed = sandbox.parseSmartTransactionLine('kopi 2 gelas 35k', 'Pengeluaran');
+      assert.equal(parsed.amount, 35000);
+      assert.equal(parsed.keterangan, 'kopi 2 gelas');
+      assert.equal(parsed.detectedCategory, 'FOOD');
+
+      const roti = sandbox.parseSmartTransactionLine('2 roti 45000', 'Pengeluaran');
+      assert.equal(roti.amount, 45000);
+      assert.equal(roti.keterangan, '2 roti');
+    });
+
+    it('sorts history deterministically by date DESC then timestamp DESC regardless of row order', () => {
+      const { sandbox } = loadFrontendContext();
+      const unsorted = [
+        { date: '2026-11-20', timestamp: '2026-11-20 09:00:00', keterangan: 'Terbaru', kategori: 'FOOD', user: 'Kevin' },
+        { date: '2026-10-15', timestamp: '2026-10-15 10:00:00', keterangan: 'Lama', kategori: 'FOOD', user: 'Kevin' },
+        { date: '2026-11-20', timestamp: '2026-11-20 14:30:00', keterangan: 'Paling Baru', kategori: 'FOOD', user: 'Vivie' },
+      ];
+      const sorted = sandbox.filterHistoryItems(unsorted, 'sheet1', {});
+      assert.equal(sorted[0].keterangan, 'Paling Baru');
+      assert.equal(sorted[1].keterangan, 'Terbaru');
+      assert.equal(sorted[2].keterangan, 'Lama');
+    });
+
+    it('preserves offline-queued records across remote sync and flushes queue when back online', async () => {
+      const { sandbox } = loadFrontendContext();
+      const pendingTx = {
+        _uid: 'TX-OFFLINE-1',
+        _pendingSync: true,
+        date: '2026-11-24',
+        type: 'Pengeluaran',
+        amount: 42000,
+        keterangan: 'Parkir Mall',
+        kategori: 'TRAVEL',
+        user: 'Kevin',
+        timestamp: '2026-11-24 19:00:00',
+      };
+      sandbox.enqueuePendingOp('addTx', pendingTx, pendingTx._uid);
+      const merged = sandbox.mergeRemoteWithPending(
+        [{ _uid: 'TX-REMOTE-1', date: '2026-11-23', type: 'Pengeluaran', amount: 50000, keterangan: 'Makan', kategori: 'FOOD', user: 'Vivie', timestamp: '2026-11-23 12:00:00' }],
+        [pendingTx],
+        'tx'
+      );
+      assert.equal(merged.length, 2);
+      assert.ok(merged.some((t) => t._uid === 'TX-OFFLINE-1'));
+
+      const flushed = await sandbox.flushPendingOps();
+      assert.equal(flushed.flushed, 1);
+      assert.equal(flushed.remaining, 0);
+    });
+
+    it('deletes a transaction and restores it via 5-second Undo toast callback', async () => {
+      const { sandbox, toasts } = loadFrontendContext();
+      const postedActions = [];
+      sandbox.fetch = async (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        postedActions.push(body.action || 'add');
+        return { ok: true, json: async () => ({ status: 'success', saved: { rowNumber: 5 } }) };
+      };
+
+      vm.runInContext(`
+        sheet1Transactions = [{
+          _uid: 'TX-DEL-1',
+          rowNumber: 3,
+          date: '2026-11-24',
+          type: 'Pengeluaran',
+          amount: 85000,
+          keterangan: 'Kopi Kenangan',
+          kategori: 'FOOD',
+          user: 'Kevin',
+          timestamp: '2026-11-24 09:00:00'
+        }];
+      `, sandbox);
+
+      await sandbox.deleteRecordInternal('tx', 'TX-DEL-1', false);
+      assert.equal(vm.runInContext('sheet1Transactions.length', sandbox), 0);
+      assert.equal(postedActions[0], 'deleteTransaction');
+      assert.equal(toasts[toasts.length - 1].hasUndo, true);
+
+      // Trigger Undo within 5s window
+      sandbox.triggerToastUndo();
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(vm.runInContext('sheet1Transactions.length', sandbox), 1);
+      assert.equal(vm.runInContext('sheet1Transactions[0].keterangan', sandbox), 'Kopi Kenangan');
+    });
+
+    it('does not attribute blank-user expenses to Kevin in coupleStats', () => {
+      const { sandbox } = loadFrontendContext();
+      const txs = [
+        { date: '2026-11-10', type: 'Pengeluaran', amount: 100000, kategori: 'FOOD', user: '' },
+        { date: '2026-11-11', type: 'Pengeluaran', amount: 200000, kategori: 'FOOD', user: 'Kevin' },
+        { date: '2026-11-12', type: 'Pengeluaran', amount: 150000, kategori: 'FOOD', user: 'Vivie' },
+      ];
+      const health = sandbox.computeFinancialHealth(txs, [], {}, '2026-11');
+      assert.equal(health.coupleStats.kevinAmt, 200000);
+      assert.equal(health.coupleStats.vivieAmt, 150000);
     });
   });
 });

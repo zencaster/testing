@@ -591,5 +591,121 @@ describe('Google Apps Script (apps-script/Code.gs)', () => {
       const getAfterDel = JSON.parse(sandbox.doGet({}).getContent());
       assert.equal(getAfterDel.goals.length, 0);
     });
+
+    it('deletes Budget row when saved with limit 0', () => {
+      const { sandbox, sheets } = createMockGasEnv();
+      sandbox.doPost({ postData: { contents: JSON.stringify({ action: 'saveBudget', kategori: 'FOOD', limit: 3000000 }) } });
+      assert.equal(sheets.Budget.rows.length, 2);
+
+      const delRes = JSON.parse(
+        sandbox.doPost({ postData: { contents: JSON.stringify({ action: 'saveBudget', kategori: 'FOOD', limit: 0 }) } }).getContent()
+      );
+      assert.equal(delRes.status, 'success');
+      assert.equal(sheets.Budget.rows.length, 1);
+    });
+  });
+
+  describe('Edit & Delete Transactions and Investments (doPost)', () => {
+    it('updates and deletes Planner transactions accurately by timestamp even if rows shifted', () => {
+      const { sandbox, sheets } = createMockGasEnv({
+        sheets: {
+          Planner: [
+            ['Date', 'Type', 'Amount', 'Keterangan', 'Kategori', 'user', 'Timestamp'],
+            ['2026-11-20', 'Pengeluaran', 50000, 'Bakmie', 'FOOD', 'Kevin', '2026-11-20 12:00:00'],
+            ['2026-11-21', 'Pengeluaran', 850000, 'Kopi Typo', 'FOOD', 'Vivie', '2026-11-21 09:00:00'],
+          ],
+          Invest: [
+            ['Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'],
+          ],
+        },
+      });
+
+      const getRes = JSON.parse(sandbox.doGet({}).getContent());
+      assert.equal(getRes.data[1].rowNumber, 3);
+
+      // Update row 3 (even passing stale rowNumber 99, timestamp resolves row 3 safely)
+      const updRes = JSON.parse(
+        sandbox.doPost({
+          postData: {
+            contents: JSON.stringify({
+              action: 'updateTransaction',
+              match: { rowNumber: 99, timestamp: '2026-11-21 09:00:00' },
+              tanggal: '2026-11-21',
+              type: 'Pengeluaran',
+              nominal: 85000,
+              keterangan: 'Kopi Kenangan',
+              kategori: 'FOOD',
+              user: 'Vivie',
+            }),
+          },
+        }).getContent()
+      );
+      assert.equal(updRes.status, 'success');
+      assert.equal(sheets.Planner.rows[2][2], 85000);
+      assert.equal(sheets.Planner.rows[2][3], 'Kopi Kenangan');
+
+      // Delete row 3
+      const delRes = JSON.parse(
+        sandbox.doPost({
+          postData: {
+            contents: JSON.stringify({
+              action: 'deleteTransaction',
+              match: { timestamp: '2026-11-21 09:00:00' },
+            }),
+          },
+        }).getContent()
+      );
+      assert.equal(delRes.status, 'success');
+      assert.equal(sheets.Planner.rows.length, 2);
+      assert.equal(sheets.Planner.rows[1][3], 'Bakmie');
+    });
+
+    it('updates and deletes Invest rows recalculating total modal accurately', () => {
+      const { sandbox, sheets } = createMockGasEnv({
+        sheets: {
+          Planner: [
+            ['Date', 'Type', 'Amount', 'Keterangan', 'Kategori', 'user', 'Timestamp'],
+          ],
+          Invest: [
+            ['Date', 'Type', 'Amount', 'Lot lembar', 'Average Buy', 'Saham', 'Keterangan', 'Kategori', 'user', 'Timestamp'],
+            ['2026-11-20', 'Invest', 9500000, 1000, 9500, 'BBCA/IDR', 'Ajaib', 'INVEST', 'Kevin', '2026-11-20 10:00:00'],
+          ],
+        },
+      });
+
+      const updRes = JSON.parse(
+        sandbox.doPost({
+          postData: {
+            contents: JSON.stringify({
+              action: 'updateInvestment',
+              match: { rowNumber: 2, timestamp: '2026-11-20 10:00:00' },
+              tanggal: '2026-11-20',
+              saham: 'BBCA/IDR',
+              lot: 1500,
+              avgBuy: 9600,
+              keterangan: 'Stockbit',
+              user: 'Kevin',
+            }),
+          },
+        }).getContent()
+      );
+      assert.equal(updRes.status, 'success');
+      assert.equal(sheets.Invest.rows[1][2], 14400000);
+      assert.equal(sheets.Invest.rows[1][3], 1500);
+      assert.equal(sheets.Invest.rows[1][6], 'Stockbit');
+
+      const delRes = JSON.parse(
+        sandbox.doPost({
+          postData: {
+            contents: JSON.stringify({
+              action: 'deleteInvestment',
+              match: { timestamp: '2026-11-20 10:00:00' },
+            }),
+          },
+        }).getContent()
+      );
+      assert.equal(delRes.status, 'success');
+      assert.equal(sheets.Invest.rows.length, 1);
+    });
   });
 });

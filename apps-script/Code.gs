@@ -130,9 +130,17 @@ function handleSaveBudgetAction(payload, tz) {
 
     if (rowIndexByCat[kategori]) {
       const rNum = rowIndexByCat[kategori];
-      sheet.getRange(rNum, 2).setValue(limit);
-      sheet.getRange(rNum, 3).setValue(updatedAt);
-    } else {
+      if (limit <= 0 && typeof sheet.deleteRow === 'function') {
+        sheet.deleteRow(rNum);
+        delete rowIndexByCat[kategori];
+        Object.keys(rowIndexByCat).forEach(function (k) {
+          if (rowIndexByCat[k] > rNum) rowIndexByCat[k] -= 1;
+        });
+      } else {
+        sheet.getRange(rNum, 2).setValue(limit);
+        sheet.getRange(rNum, 3).setValue(updatedAt);
+      }
+    } else if (limit > 0) {
       sheet.appendRow([kategori, limit, updatedAt]);
       rowIndexByCat[kategori] = sheet.getLastRow();
     }
@@ -510,6 +518,7 @@ function doGet(e) {
       const rawType = String(row[1] || 'Pengeluaran').trim();
       const normalizedType = rawType.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
       transactions.push({
+        rowNumber: i + 1,
         tanggal: formatCellDate(row[0], tz),
         type: normalizedType,
         nominal: parseNumber(row[2]),
@@ -539,6 +548,7 @@ function doGet(e) {
       }
 
       investments.push({
+        rowNumber: i + 1,
         tanggal: formatCellDate(row[0], tz),
         type: String(row[1] || 'Invest').trim(),
         amount: amount,
@@ -570,6 +580,213 @@ function doGet(e) {
   }
 }
 
+function findMatchingTxRow(rows, match, tz) {
+  const m = match || {};
+  const targetRow = parseInt(m.rowNumber, 10) || 0;
+  const targetTs = String(m.timestamp || '').trim();
+  const targetDate = String(m.tanggal || m.date || '').trim();
+  const targetAmount = pickNumber(m, ['nominal', 'amount'], -1);
+  const targetKet = String(m.keterangan || '').trim();
+  const targetUser = String(m.user || '').trim().toLowerCase();
+
+  function matchesRow(i, strictTs) {
+    const row = rows[i];
+    if (!row) return false;
+    const rowTs = formatCellTimestamp(row[6], tz);
+    if (targetTs) {
+      if (rowTs !== targetTs) return false;
+      if (strictTs) return true;
+    }
+    const rowDate = formatCellDate(row[0], tz);
+    const rowAmt = Math.round(parseNumber(row[2]));
+    const rowKet = String(row[3] || '').trim();
+    const rowUser = String(row[5] || '').trim().toLowerCase();
+    if (targetDate && rowDate !== targetDate) return false;
+    if (targetAmount >= 0 && rowAmt !== Math.round(targetAmount)) return false;
+    if (targetKet && rowKet !== targetKet) return false;
+    if (targetUser && rowUser !== targetUser) return false;
+    return true;
+  }
+
+  if (targetRow >= 2 && targetRow <= rows.length && matchesRow(targetRow - 1, Boolean(targetTs))) {
+    return targetRow;
+  }
+  if (targetTs) {
+    for (let i = rows.length - 1; i >= 1; i--) {
+      if (matchesRow(i, true)) return i + 1;
+    }
+  }
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (matchesRow(i, false)) return i + 1;
+  }
+  return -1;
+}
+
+function findMatchingInvestRow(rows, match, tz) {
+  const m = match || {};
+  const targetRow = parseInt(m.rowNumber, 10) || 0;
+  const targetTs = String(m.timestamp || '').trim();
+  const targetDate = String(m.tanggal || m.date || '').trim();
+  const targetSaham = String(m.saham || '').trim().toUpperCase();
+  const targetLot = pickNumber(m, ['lot', 'lembar'], -1);
+  const targetUser = String(m.user || '').trim().toLowerCase();
+
+  function matchesRow(i, strictTs) {
+    const row = rows[i];
+    if (!row) return false;
+    const rowTs = formatCellTimestamp(row[9], tz);
+    if (targetTs) {
+      if (rowTs !== targetTs) return false;
+      if (strictTs) return true;
+    }
+    const rowDate = formatCellDate(row[0], tz);
+    const rowLot = parseNumber(row[3]);
+    const rowSaham = String(row[5] || '').trim().toUpperCase();
+    const rowUser = String(row[8] || '').trim().toLowerCase();
+    if (targetDate && rowDate !== targetDate) return false;
+    if (targetSaham && rowSaham !== targetSaham) return false;
+    if (targetLot >= 0 && Math.abs(rowLot - targetLot) > 1e-8) return false;
+    if (targetUser && rowUser !== targetUser) return false;
+    return true;
+  }
+
+  if (targetRow >= 2 && targetRow <= rows.length && matchesRow(targetRow - 1, Boolean(targetTs))) {
+    return targetRow;
+  }
+  if (targetTs) {
+    for (let i = rows.length - 1; i >= 1; i--) {
+      if (matchesRow(i, true)) return i + 1;
+    }
+  }
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (matchesRow(i, false)) return i + 1;
+  }
+  return -1;
+}
+
+function handleUpdateTransactionAction(payload, tz) {
+  const txSheet = getTxSheet();
+  const rows = txSheet.getDataRange().getValues();
+  const foundRow = findMatchingTxRow(rows, payload.match || payload, tz);
+  if (foundRow < 2) {
+    return jsonResponse({ status: 'error', message: 'Transaksi tidak ditemukan di Sheet.' });
+  }
+
+  const nominal = pickNumber(payload, ['nominal', 'amount'], 0);
+  if (nominal <= 0) {
+    return jsonResponse({ status: 'error', message: 'Nominal transaksi harus lebih dari 0' });
+  }
+
+  const rawType = String(payload.type || 'Pengeluaran').trim();
+  const normalizedType = rawType.toLowerCase() === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran';
+  const tanggal = String(payload.tanggal || payload.date || formatCellDate(rows[foundRow - 1][0], tz)).trim();
+  const keterangan = String(payload.keterangan !== undefined ? payload.keterangan : rows[foundRow - 1][3] || '').trim();
+  const kategori = String(payload.kategori || rows[foundRow - 1][4] || 'OTHER').trim().toUpperCase();
+  const user = String(payload.user || rows[foundRow - 1][5] || 'Kevin').trim();
+  const existingTs = formatCellTimestamp(rows[foundRow - 1][6], tz) || String(payload.timestamp || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss')).trim();
+
+  txSheet.getRange(foundRow, 1).setValue(tanggal);
+  txSheet.getRange(foundRow, 2).setValue(normalizedType);
+  txSheet.getRange(foundRow, 3).setValue(nominal);
+  txSheet.getRange(foundRow, 4).setValue(keterangan);
+  txSheet.getRange(foundRow, 5).setValue(kategori);
+  txSheet.getRange(foundRow, 6).setValue(user);
+  txSheet.getRange(foundRow, 7).setValue(existingTs);
+
+  return jsonResponse({
+    status: 'success',
+    message: 'Transaksi berhasil diperbarui',
+    updated: {
+      rowNumber: foundRow,
+      tanggal: tanggal,
+      type: normalizedType,
+      nominal: nominal,
+      keterangan: keterangan,
+      kategori: kategori,
+      user: user,
+      timestamp: existingTs
+    }
+  });
+}
+
+function handleDeleteTransactionAction(payload, tz) {
+  const txSheet = getTxSheet();
+  const rows = txSheet.getDataRange().getValues();
+  const foundRow = findMatchingTxRow(rows, payload.match || payload, tz);
+  if (foundRow < 2) {
+    return jsonResponse({ status: 'error', message: 'Transaksi tidak ditemukan di Sheet.' });
+  }
+  txSheet.deleteRow(foundRow);
+  return jsonResponse({ status: 'success', message: 'Transaksi berhasil dihapus', rowNumber: foundRow });
+}
+
+function handleUpdateInvestmentAction(payload, tz) {
+  const investSheet = getInvestSheet();
+  const rows = investSheet.getDataRange().getValues();
+  const foundRow = findMatchingInvestRow(rows, payload.match || payload, tz);
+  if (foundRow < 2) {
+    return jsonResponse({ status: 'error', message: 'Catatan investasi tidak ditemukan di Sheet.' });
+  }
+
+  const lot = pickNumber(payload, ['lot', 'lembar', 'lotLembar'], 0);
+  let avgBuy = pickNumber(payload, ['avgBuy', 'avgPrice', 'averageBuy'], 0);
+  let amount = pickNumber(payload, ['amount', 'nominal'], 0);
+
+  if (lot <= 0) {
+    return jsonResponse({ status: 'error', message: 'Jumlah lembar/unit harus lebih dari 0' });
+  }
+  if (avgBuy === 0 && amount > 0 && lot > 0) avgBuy = amount / lot;
+  if (amount === 0 && lot > 0 && avgBuy > 0) amount = Math.round(lot * avgBuy);
+  if (avgBuy <= 0 || amount <= 0) {
+    return jsonResponse({ status: 'error', message: 'Harga beli atau total modal harus lebih dari 0' });
+  }
+
+  const tanggal = String(payload.tanggal || payload.date || formatCellDate(rows[foundRow - 1][0], tz)).trim();
+  const saham = String(payload.saham || payload.kodeInvest || rows[foundRow - 1][5] || 'BBCA/IDR').trim().toUpperCase();
+  const keterangan = String(payload.keterangan !== undefined ? payload.keterangan : rows[foundRow - 1][6] || '').trim();
+  const kategori = String(payload.kategori || rows[foundRow - 1][7] || 'INVEST').trim().toUpperCase();
+  const user = String(payload.user || rows[foundRow - 1][8] || 'Kevin').trim();
+  const existingTs = formatCellTimestamp(rows[foundRow - 1][9], tz) || String(payload.timestamp || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss')).trim();
+
+  investSheet.getRange(foundRow, 1).setValue(tanggal);
+  investSheet.getRange(foundRow, 2).setValue('Invest');
+  investSheet.getRange(foundRow, 3).setValue(amount);
+  investSheet.getRange(foundRow, 4).setValue(lot);
+  investSheet.getRange(foundRow, 5).setValue(avgBuy);
+  investSheet.getRange(foundRow, 6).setValue(saham);
+  investSheet.getRange(foundRow, 7).setValue(keterangan);
+  investSheet.getRange(foundRow, 8).setValue(kategori);
+  investSheet.getRange(foundRow, 9).setValue(user);
+  investSheet.getRange(foundRow, 10).setValue(existingTs);
+
+  return jsonResponse({
+    status: 'success',
+    message: 'Catatan investasi berhasil diperbarui',
+    updated: {
+      rowNumber: foundRow,
+      tanggal: tanggal,
+      amount: amount,
+      lot: lot,
+      avgBuy: avgBuy,
+      saham: saham,
+      keterangan: keterangan,
+      user: user,
+      timestamp: existingTs
+    }
+  });
+}
+
+function handleDeleteInvestmentAction(payload, tz) {
+  const investSheet = getInvestSheet();
+  const rows = investSheet.getDataRange().getValues();
+  const foundRow = findMatchingInvestRow(rows, payload.match || payload, tz);
+  if (foundRow < 2) {
+    return jsonResponse({ status: 'error', message: 'Catatan investasi tidak ditemukan di Sheet.' });
+  }
+  investSheet.deleteRow(foundRow);
+  return jsonResponse({ status: 'success', message: 'Catatan investasi berhasil dihapus', rowNumber: foundRow });
+}
+
 function doPost(e) {
   try {
     const tz = Session.getScriptTimeZone() || 'Asia/Jakarta';
@@ -591,6 +808,18 @@ function doPost(e) {
     }
     if (action === 'deletegoal' || action === 'delete_goal') {
       return handleDeleteGoalAction(payload);
+    }
+    if (action === 'updatetransaction' || action === 'update_transaction') {
+      return handleUpdateTransactionAction(payload, tz);
+    }
+    if (action === 'deletetransaction' || action === 'delete_transaction') {
+      return handleDeleteTransactionAction(payload, tz);
+    }
+    if (action === 'updateinvestment' || action === 'update_investment') {
+      return handleUpdateInvestmentAction(payload, tz);
+    }
+    if (action === 'deleteinvestment' || action === 'delete_investment') {
+      return handleDeleteInvestmentAction(payload, tz);
     }
 
     const rawType = String(payload.type || 'Pengeluaran').trim();
@@ -644,7 +873,7 @@ function doPost(e) {
       return jsonResponse({
         status: 'success',
         message: 'Data investasi berhasil ditambahkan',
-        saved: { tanggal: tanggal, amount: amount, lot: lot, avgBuy: avgBuy, saham: saham }
+        saved: { rowNumber: investSheet.getLastRow(), tanggal: tanggal, amount: amount, lot: lot, avgBuy: avgBuy, saham: saham, timestamp: timestamp }
       });
     }
 
@@ -669,7 +898,7 @@ function doPost(e) {
     return jsonResponse({
       status: 'success',
       message: 'Data transaksi berhasil ditambahkan',
-      saved: { tanggal: tanggal, type: normalizedType, nominal: nominal, kategori: kategori || 'OTHER' }
+      saved: { rowNumber: txSheet.getLastRow(), tanggal: tanggal, type: normalizedType, nominal: nominal, kategori: kategori || 'OTHER', timestamp: timestamp }
     });
   } catch (err) {
     return jsonResponse({ status: 'error', message: err.toString() });
