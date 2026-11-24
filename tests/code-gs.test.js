@@ -69,6 +69,12 @@ function createMockGasEnv(options = {}) {
   const fetchResponder =
     options.fetchResponder ||
     ((url) => {
+      if (url.includes('indodax')) {
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({ ticker: { last: '1500000000' } }),
+        };
+      }
       if (url.includes('coingecko')) {
         return {
           getResponseCode: () => 200,

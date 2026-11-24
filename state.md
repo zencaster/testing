@@ -4,6 +4,7 @@ Aplikasi web mobile-first (`max-width: 430px`) untuk pencatatan keuangan rumah t
 
 ## Tech Stack
 - **Frontend:** Single-file static HTML/CSS/JS (`index.html`), Chart.js, mobile-first UI (`max-width: 430px`)
+- **Market Price API:** Vercel Serverless Function (`api/prices.mjs` → `/api/prices`, Yahoo Finance `BBCA.JK` + Indodax/Coinbase/CoinGecko `BTC/IDR`) dengan fallback Apps Script & client-side API
 - **Backend Bridge:** Google Apps Script Web App (`apps-script/Code.gs`) + fallback read via Google Sheets Visualization API (`gviz`)
 - **Database:** Google Spreadsheet (`18hYx94mb6zrObubgV4nZ8D-u83mYPNXXNBBfaPyAbxI` — sheets `Planner`/`Sheet1`, `Invest`, `Users`, `Budget`, `Goals`)
 - **Testing:** Node.js native test runner (`npm test` → `node --test tests/*.test.js`)

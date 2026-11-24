@@ -435,45 +435,66 @@ function fetchMarketPrices(forceRefresh) {
 
   let updatedAny = false;
 
-  // 1. Ambil harga BTC/IDR dari CoinGecko (24/7)
+  // 1. Ambil harga BTC/IDR (Indodax -> CoinGecko)
   try {
-    const resBtc = UrlFetchApp.fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr',
+    const resIx = UrlFetchApp.fetch(
+      'https://indodax.com/api/ticker/btcidr',
       { muteHttpExceptions: true }
     );
-    if (resBtc.getResponseCode() === 200) {
-      const jsonBtc = JSON.parse(resBtc.getContentText());
-      if (jsonBtc && jsonBtc.bitcoin && Number(jsonBtc.bitcoin.idr) > 0) {
-        btcPrice = Number(jsonBtc.bitcoin.idr);
+    if (resIx.getResponseCode() === 200) {
+      const jsonIx = JSON.parse(resIx.getContentText());
+      if (jsonIx && jsonIx.ticker && Number(jsonIx.ticker.last) > 0) {
+        btcPrice = Math.round(Number(jsonIx.ticker.last));
         updatedAny = true;
       }
     }
   } catch (e) {}
 
-  // 2. Ambil harga BBCA/IDR dari Yahoo Finance (fallback ke cache jika gagal / luar jam bursa)
-  try {
-    const resBbca = UrlFetchApp.fetch(
-      'https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d',
-      {
+  if (!updatedAny || btcPrice <= 0) {
+    try {
+      const resBtc = UrlFetchApp.fetch(
+        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=idr',
+        { muteHttpExceptions: true }
+      );
+      if (resBtc.getResponseCode() === 200) {
+        const jsonBtc = JSON.parse(resBtc.getContentText());
+        if (jsonBtc && jsonBtc.bitcoin && Number(jsonBtc.bitcoin.idr) > 0) {
+          btcPrice = Math.round(Number(jsonBtc.bitcoin.idr));
+          updatedAny = true;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Ambil harga BBCA/IDR dari Yahoo Finance (query1 -> query2)
+  const yahooUrls = [
+    'https://query1.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d',
+    'https://query2.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d'
+  ];
+  for (let u = 0; u < yahooUrls.length; u++) {
+    try {
+      const resBbca = UrlFetchApp.fetch(yahooUrls[u], {
         muteHttpExceptions: true,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      });
+      if (resBbca.getResponseCode() === 200) {
+        const jsonBbca = JSON.parse(resBbca.getContentText());
+        const result0 = jsonBbca && jsonBbca.chart && jsonBbca.chart.result && jsonBbca.chart.result[0];
+        const meta = result0 && result0.meta;
+        const regularPrice = Number((meta && meta.regularMarketPrice) || 0);
+        const prevClose = Number((meta && (meta.chartPreviousClose || meta.previousClose)) || 0);
+        if (regularPrice > 0) {
+          bbcaPrice = Math.round(regularPrice);
+          updatedAny = true;
+          break;
+        } else if (prevClose > 0) {
+          bbcaPrice = Math.round(prevClose);
+          updatedAny = true;
+          break;
+        }
       }
-    );
-    if (resBbca.getResponseCode() === 200) {
-      const jsonBbca = JSON.parse(resBbca.getContentText());
-      const result0 = jsonBbca && jsonBbca.chart && jsonBbca.chart.result && jsonBbca.chart.result[0];
-      const meta = result0 && result0.meta;
-      const regularPrice = Number((meta && meta.regularMarketPrice) || 0);
-      const prevClose = Number((meta && (meta.chartPreviousClose || meta.previousClose)) || 0);
-      if (regularPrice > 0) {
-        bbcaPrice = regularPrice;
-        updatedAny = true;
-      } else if (prevClose > 0) {
-        bbcaPrice = prevClose;
-        updatedAny = true;
-      }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   if (updatedAny && (bbcaPrice > 0 || btcPrice > 0)) {
     updatedAt = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');

@@ -1652,7 +1652,18 @@
       "BBCA/IDR": 0,
       "BTC/IDR": 0
     };
+    let liveMarketPricesMeta = {
+      updatedAtMs: 0,
+      isManual: false
+    };
     let priceSourceLabel = "Sumber harga pasar • Per lembar / unit";
+    const MARKET_PRICE_STALE_MS = 15 * 60 * 1000; // Auto-refresh setiap 15 menit
+
+    function shouldAutoRefreshMarketPrices() {
+      if (!liveMarketPrices["BBCA/IDR"] || !liveMarketPrices["BTC/IDR"]) return true;
+      if (liveMarketPricesMeta.isManual) return false;
+      return !liveMarketPricesMeta.updatedAtMs || (Date.now() - liveMarketPricesMeta.updatedAtMs) > MARKET_PRICE_STALE_MS;
+    }
 
     function generateUid(prefix) {
       uidCounter += 1;
@@ -1862,6 +1873,16 @@
             if (Number(parsedPrices["BTC/IDR"]) > 0) liveMarketPrices["BTC/IDR"] = Number(parsedPrices["BTC/IDR"]);
           }
         }
+        const rawPricesMeta = localStorage.getItem("kv_v6_prices_meta");
+        if (rawPricesMeta) {
+          const parsedMeta = JSON.parse(rawPricesMeta);
+          if (parsedMeta && typeof parsedMeta === "object") {
+            liveMarketPricesMeta = {
+              updatedAtMs: Number(parsedMeta.updatedAtMs) || 0,
+              isManual: Boolean(parsedMeta.isManual)
+            };
+          }
+        }
         const rawBudgets = localStorage.getItem("kv_v5_budgets");
         if (rawBudgets) {
           monthlyBudgets = normalizeBudgetsList(JSON.parse(rawBudgets));
@@ -1891,6 +1912,7 @@
         localStorage.setItem("kv_v3_invest", JSON.stringify(investTransactions));
         localStorage.setItem("kv_v4_categories", JSON.stringify(customCategories));
         localStorage.setItem("kv_v3_prices", JSON.stringify(liveMarketPrices));
+        localStorage.setItem("kv_v6_prices_meta", JSON.stringify(liveMarketPricesMeta));
         localStorage.setItem("kv_v5_budgets", JSON.stringify(monthlyBudgets));
         localStorage.setItem("kv_v5_goals", JSON.stringify(sharedGoals));
         localStorage.setItem("kv_v6_pending_ops", JSON.stringify(pendingOps));
@@ -2724,12 +2746,18 @@
               sharedGoals = normalizeGoalsList(extracted.goalList);
             }
             if (json.prices && typeof json.prices === "object") {
+              let gotAllPrices = true;
               if (Number(json.prices["BBCA/IDR"]) > 0) liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
+              else gotAllPrices = false;
               if (Number(json.prices["BTC/IDR"]) > 0) liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
-              const updatedLabel = json.prices.updatedAt
-                ? String(json.prices.updatedAt).slice(0, 16)
-                : new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-              priceSourceLabel = "Update pasar " + updatedLabel;
+              else gotAllPrices = false;
+              if (gotAllPrices) {
+                liveMarketPricesMeta = { updatedAtMs: Date.now(), isManual: false };
+                const updatedLabel = json.prices.updatedAt
+                  ? String(json.prices.updatedAt).slice(0, 16)
+                  : new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+                priceSourceLabel = "Update pasar " + updatedLabel;
+              }
             }
             syncCategoriesFromData();
             saveLocalState();
@@ -2788,7 +2816,7 @@
       }
 
       safeRenderAllUI();
-      if (!liveMarketPrices["BBCA/IDR"] || !liveMarketPrices["BTC/IDR"]) {
+      if (shouldAutoRefreshMarketPrices()) {
         await refreshInvestmentPrices(false);
       }
 
@@ -4971,7 +4999,7 @@
         renderDashboard();
       } else if (pageNum === 3) {
         renderInvestmentReport();
-        if (!liveMarketPrices["BBCA/IDR"] || !liveMarketPrices["BTC/IDR"]) {
+        if (shouldAutoRefreshMarketPrices()) {
           refreshInvestmentPrices(false);
         }
       }
@@ -5427,40 +5455,66 @@
         btn.textContent = "Memuat...";
       }
 
-      let updatedAny = false;
-      let refreshedViaScript = false;
+      let gotBbca = false;
+      let gotBtc = false;
+      let sourceNames = [];
 
+      // Layer 1 (Primary on Vercel): Same-origin /api/prices (Yahoo Finance BBCA.JK + Indodax/Coinbase/CoinGecko BTC/IDR)
+      try {
+        const apiUrl = "/api/prices" + (showToastFlag ? "?refresh=1" : "");
+        const apiRes = await fetch(apiUrl, { method: "GET" });
+        if (apiRes.ok) {
+          const apiJson = await apiRes.json();
+          if (apiJson && apiJson.prices) {
+            if (Number(apiJson.prices["BBCA/IDR"]) > 0) {
+              liveMarketPrices["BBCA/IDR"] = Math.round(Number(apiJson.prices["BBCA/IDR"]));
+              gotBbca = true;
+              if (apiJson.prices.sources && apiJson.prices.sources.bbca && apiJson.prices.sources.bbca !== "unavailable") {
+                sourceNames.push(apiJson.prices.sources.bbca);
+              }
+            }
+            if (Number(apiJson.prices["BTC/IDR"]) > 0) {
+              liveMarketPrices["BTC/IDR"] = Math.round(Number(apiJson.prices["BTC/IDR"]));
+              gotBtc = true;
+              if (apiJson.prices.sources && apiJson.prices.sources.btc && apiJson.prices.sources.btc !== "unavailable") {
+                sourceNames.push(apiJson.prices.sources.btc);
+              }
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Layer 2: Apps Script fallback (if /api/prices unavailable, e.g. local static file)
       const scriptUrl = getScriptUrl();
-      if (scriptUrl) {
+      if ((!gotBbca || !gotBtc) && scriptUrl) {
         try {
           const refreshUrl = scriptUrl + (scriptUrl.indexOf("?") === -1 ? "?refresh=1" : "&refresh=1");
           const res = await fetch(refreshUrl, { method: "GET", redirect: "follow" });
           if (res.ok) {
             const json = await res.json();
             if (json && json.prices) {
-              if (Number(json.prices["BBCA/IDR"]) > 0) {
-                liveMarketPrices["BBCA/IDR"] = Number(json.prices["BBCA/IDR"]);
-                updatedAny = true;
-                refreshedViaScript = true;
+              if (!gotBbca && Number(json.prices["BBCA/IDR"]) > 0) {
+                liveMarketPrices["BBCA/IDR"] = Math.round(Number(json.prices["BBCA/IDR"]));
+                gotBbca = true;
               }
-              if (Number(json.prices["BTC/IDR"]) > 0) {
-                liveMarketPrices["BTC/IDR"] = Number(json.prices["BTC/IDR"]);
-                updatedAny = true;
-                refreshedViaScript = true;
+              if (!gotBtc && Number(json.prices["BTC/IDR"]) > 0) {
+                liveMarketPrices["BTC/IDR"] = Math.round(Number(json.prices["BTC/IDR"]));
+                gotBtc = true;
               }
             }
           }
         } catch (e) {}
       }
 
-      if (!refreshedViaScript || liveMarketPrices["BTC/IDR"] <= 0) {
+      // Layer 3: Direct 3rd-party browser fallbacks
+      if (!gotBtc) {
         try {
           const btcRes = await fetch("https://api.coinbase.com/v2/prices/BTC-IDR/spot");
           const btcJson = await btcRes.json();
           const btcSpot = Number(btcJson && btcJson.data && btcJson.data.amount);
           if (btcSpot > 0) {
             liveMarketPrices["BTC/IDR"] = Math.round(btcSpot);
-            updatedAny = true;
+            gotBtc = true;
           }
         } catch (e) {
           try {
@@ -5469,19 +5523,47 @@
             const cgPrice = Number(cgJson && cgJson.bitcoin && cgJson.bitcoin.idr);
             if (cgPrice > 0) {
               liveMarketPrices["BTC/IDR"] = Math.round(cgPrice);
-              updatedAny = true;
+              gotBtc = true;
             }
           } catch (err2) {}
         }
       }
 
+      if (!gotBbca) {
+        try {
+          const yahooUrl = encodeURIComponent("https://query2.finance.yahoo.com/v8/finance/chart/BBCA.JK?interval=1d&range=5d");
+          const bbcaRes = await fetch("https://api.allorigins.win/get?url=" + yahooUrl);
+          const bbcaWrapper = await bbcaRes.json();
+          if (bbcaWrapper && bbcaWrapper.contents) {
+            const parsedYahoo = JSON.parse(bbcaWrapper.contents);
+            const meta = parsedYahoo && parsedYahoo.chart && parsedYahoo.chart.result && parsedYahoo.chart.result[0] && parsedYahoo.chart.result[0].meta;
+            const marketPrice = Number((meta && (meta.regularMarketPrice || meta.chartPreviousClose || meta.previousClose)) || 0);
+            if (marketPrice > 0) {
+              liveMarketPrices["BBCA/IDR"] = Math.round(marketPrice);
+              gotBbca = true;
+            }
+          }
+        } catch (e) {}
+      }
+
+      const updatedAny = gotBbca || gotBtc;
       const timeNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
       if (updatedAny) {
-        priceSourceLabel = "Harga pasar diperbarui " + timeNow;
+        liveMarketPricesMeta = { updatedAtMs: Date.now(), isManual: false };
+        const uniqueSources = Array.from(new Set(sourceNames));
+        const srcText = uniqueSources.length > 0 ? uniqueSources.join(" & ") : "Market API";
+        priceSourceLabel = srcText + " • " + timeNow;
         saveLocalState();
-        if (showToastFlag) showToast("Harga BBCA/IDR & BTC/IDR diperbarui", "OK");
+        if (showToastFlag) {
+          const msg = gotBbca && gotBtc
+            ? "Harga BBCA/IDR & BTC/IDR diperbarui"
+            : gotBbca
+              ? "Harga BBCA/IDR diperbarui"
+              : "Harga BTC/IDR diperbarui (BBCA pakai cache)";
+          showToast(msg, "OK");
+        }
       } else if (showToastFlag) {
-        showToast("Memakai harga terakhir tersimpan / manual", "i");
+        showToast("Gagal ambil harga live — memakai harga tersimpan", "!");
       }
 
       if (btn) {
@@ -5490,6 +5572,7 @@
       }
 
       renderInvestmentReport();
+      try { renderDashboard(); } catch (e) {}
     }
 
     function openManualPriceEditor(assetCode) {
@@ -5516,10 +5599,12 @@
         return;
       }
       liveMarketPrices[targetCode] = val;
+      liveMarketPricesMeta = { updatedAtMs: Date.now(), isManual: true };
       priceSourceLabel = "Harga manual • " + new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
       saveLocalState();
       closeManualPriceEditor();
       renderInvestmentReport();
+      try { renderDashboard(); } catch (e) {}
       showToast("Harga " + targetCode + " diperbarui!", "OK");
     }
 

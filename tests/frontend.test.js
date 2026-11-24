@@ -677,5 +677,44 @@ describe('Frontend Application (index.html)', () => {
       assert.equal(health.coupleStats.kevinAmt, 200000);
       assert.equal(health.coupleStats.vivieAmt, 150000);
     });
+
+    it('fetches live BBCA/IDR & BTC/IDR from same-origin /api/prices and auto-refreshes stale cached prices', async () => {
+      const { sandbox, toasts } = loadFrontendContext();
+      const requestedUrls = [];
+      sandbox.fetch = async (url) => {
+        requestedUrls.push(url);
+        if (String(url).startsWith('/api/prices')) {
+          return {
+            ok: true,
+            json: async () => ({
+              status: 'success',
+              prices: {
+                'BBCA/IDR': 5800,
+                'BTC/IDR': 1090000000,
+                updatedAt: '2026-11-24 23:16:00',
+                sources: { bbca: 'Yahoo Finance', btc: 'Indodax' },
+              },
+            }),
+          };
+        }
+        return { ok: false, json: async () => ({}) };
+      };
+
+      // Simulate stale cached prices from an older session
+      vm.runInContext(`
+        liveMarketPrices['BBCA/IDR'] = 9800;
+        liveMarketPrices['BTC/IDR'] = 1400000000;
+        liveMarketPricesMeta = { updatedAtMs: 0, isManual: false };
+      `, sandbox);
+
+      assert.equal(sandbox.shouldAutoRefreshMarketPrices(), true);
+      await sandbox.refreshInvestmentPrices(true);
+
+      assert.equal(requestedUrls[0], '/api/prices?refresh=1');
+      assert.equal(vm.runInContext("liveMarketPrices['BBCA/IDR']", sandbox), 5800);
+      assert.equal(vm.runInContext("liveMarketPrices['BTC/IDR']", sandbox), 1090000000);
+      assert.equal(sandbox.shouldAutoRefreshMarketPrices(), false);
+      assert.ok(toasts.some((t) => t.msg.includes('BBCA/IDR & BTC/IDR diperbarui')));
+    });
   });
 });
