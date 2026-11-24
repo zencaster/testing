@@ -1,0 +1,27 @@
+# Dependencies & build artifacts
+node_modules/
+dist/
+build/
+.vercel/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+npm-debug.log*
+.cache/
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Local agent artifacts (global skills live in ~/.gemini/config/skills)
+.agents/
+.agent/
+skills-lock.json
